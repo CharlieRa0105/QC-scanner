@@ -51,7 +51,7 @@ This is the **first** integration slice. Only path generation is real.
 | **Generate scan path** (Load CAD → Preview) | **REAL** — `POST /api/plan` runs `cad_loader → normal_estimation → waypoint_generator → incidence_cone_modifier` and returns the real waypoint count, line count, bbox, mesh stats, incidence, and a decimated waypoint preview. |
 | **Robot connection** (header status dot + IP) | **REAL** — `robot_bridge.py` opens a real xCore SDK session (`/api/robot/connect`, `/api/robot/status`). Uses the real SDK when the arm is reachable on a compatible Python, else the **mock SDK** (label shows "Connected · mock"). Offline → honestly shows "Offline". |
 | **Debug joint telemetry** | **REAL** — `/api/robot/joints` streams live `jointPos`/`jointVel`/`jointTorque` from the connected arm (real or mock). The slider/field set a local target; motion command is **not** wired (safety). |
-| **RViz launch** | **REAL launch** — `/api/rviz/launch` spawns `rviz2` in the host ROS2 env. It opens **empty**: the SR5 model + scan path need the robot description (URDF+meshes) + a joint/marker bridge, which aren't on this host yet. |
+| **RViz launch** | **REAL** — `/api/rviz/launch` runs the SR5 arm view in the **Humble Docker container** (`qc-humble`), GUI forwarded to the host X display: the exact SR5 model + a joint-slider window (drag to move). No rail / no scan-path overlay yet. Build once with `docker/build.sh`. |
 | Analytics / scan history / heatmap | **Empty state** — no QC results store exists, so it shows "No scan data yet" instead of fabricated dashboards. |
 | Live scan progress, ROS2 graph, logs, Open3D | Mock (front-end) — no MovementDriver / scanner capture / QC engine yet |
 
@@ -106,6 +106,26 @@ correct, just coarse. To get a demo-quality multi-line raster, pass an explicit
 `raster_spacing_mm` in the `generatePath` request body (front-end) or when
 calling the endpoint directly. The real fix is pinning the MIRACO Plus FOV
 (tracked open item).
+
+## ROS2 / RViz (Humble, in Docker)
+
+The ROKAE SDK + `rokae_ros2` only support **ROS2 Humble**, so all ROS2 work
+runs in the `qc-humble` Docker container (base `osrf/ros:humble-desktop-full`
++ `joint_state_publisher_gui`), not on the host. See `docker/`.
+
+```bash
+docker/build.sh     # build qc-humble + clone rokae_ros2 into ros2_ws/src
+docker/run_arm.sh   # SR5 in RViz + joint sliders (X11 forwarded to the host)
+```
+
+`run_arm.sh` bind-mounts `ros2_ws` at `/ros2_ws` (space-free path, so
+`package://` resolves after a `colcon build`), forwards X11, and launches
+`docker/view_arm.launch.py` (robot_state_publisher + joint_state_publisher_gui
++ rviz2). The console's **Open in RViz** button runs the same thing via
+`/api/rviz/launch`.
+
+The host no longer needs a ROS2 install. To remove the old `lyrical`:
+`sudo apt remove 'ros-lyrical-*' && sudo apt autoremove`.
 
 ## Offline
 

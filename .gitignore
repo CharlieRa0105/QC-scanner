@@ -13,5 +13,8 @@ __pycache__/
 dist/
 build/
 
+# Vendored ROS2 description clone (large; reproduced by scripts/setup_arm_viz.sh)
+ros2_ws/src/rokae_ros2/
+
 # OS
 .DS_Store

@@ -263,55 +263,56 @@ def run_plan(part_id, params):
     }
 
 
-def _find_ros_setup():
-    """Return the path to a ROS2 setup.bash on the host, or None."""
-    base = Path("/opt/ros")
-    if not base.is_dir():
-        return None
-    for distro in sorted(base.iterdir()):
-        setup = distro / "setup.bash"
-        if setup.exists():
-            return str(setup)
-    return None
-
-
 def launch_rviz():
-    """Actually launch rviz2 on the host (real, detached). Honest about the
-    fact that the SR5 model + scan path won't appear until the robot
-    description + a joint/marker bridge are set up (not present on this host).
+    """Launch the SR5 arm view in RViz via the Humble Docker container.
 
-    Returns a status dict for the UI.
+    All ROS2 work runs in the `qc-humble` container (the ROKAE stack only
+    supports Humble), with the GUI forwarded to the host X display. Runs
+    detached so it outlives the request. Returns a status dict for the UI.
+
+    Repo dir (holding docker/ + ros2_ws/) is REPO_ROOT for a source run; set
+    QC_REPO_DIR when running the packaged app so the container can mount the
+    real workspace.
     """
     import shutil
     import subprocess
 
-    setup = _find_ros_setup()
-    if setup is None:
-        return {"launched": False, "reason": "no ROS2 install found under /opt/ros"}
+    repo = Path(os.environ.get("QC_REPO_DIR") or REPO_ROOT)
 
-    # rviz2 lives in the ROS2 env, so check via the sourced shell.
-    check = subprocess.run(
-        ["bash", "-lc", f"source {setup} >/dev/null 2>&1 && command -v rviz2"],
-        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
-    )
-    if check.returncode != 0 or not check.stdout.strip():
-        return {"launched": False, "reason": "rviz2 not found in the ROS2 environment"}
-
+    if shutil.which("docker") is None:
+        return {"launched": False, "reason": "docker not found on the host"}
+    if not (repo / "ros2_ws" / "src" / "rokae_ros2").is_dir():
+        return {"launched": False,
+                "reason": f"rokae_ros2 workspace not found under {repo}/ros2_ws — run docker/build.sh"}
     if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
         return {"launched": False, "reason": "no display available (headless session)"}
+    if subprocess.run(["docker", "image", "inspect", "qc-humble"],
+                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
+        return {"launched": False, "reason": "qc-humble image not built — run docker/build.sh"}
 
-    # Detached launch so it outlives the request; new session so it isn't
-    # killed with the server.
-    subprocess.Popen(
-        ["bash", "-lc", f"source {setup} && exec rviz2"],
-        start_new_session=True,
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    # Allow the container to reach the host X server, then detached docker run.
+    subprocess.run(["bash", "-lc", "xhost +local:root >/dev/null 2>&1 || true"])
+    cmd = (
+        'docker run --rm -d --net=host '
+        '-e DISPLAY="$DISPLAY" -e QT_X11_NO_MITSHM=1 '
+        '-e LIBGL_ALWAYS_SOFTWARE=1 -e XDG_RUNTIME_DIR=/tmp/runtime-root '
+        '-v /tmp/.X11-unix:/tmp/.X11-unix '
+        f'-v "{repo}/ros2_ws:/ros2_ws" '
+        f'-v "{repo}/docker/view_arm.launch.py:/view_arm.launch.py:ro" '
+        f'-v "{repo}/docker/view_arm.rviz:/view_arm.rviz:ro" '
+        '-v qc_humble_build:/ros2_ws/build -v qc_humble_install:/ros2_ws/install '
+        'qc-humble bash -lc "source /opt/ros/humble/setup.bash && cd /ros2_ws && '
+        'colcon build --packages-select rokae_description >/dev/null && '
+        'source install/setup.bash && ros2 launch /view_arm.launch.py"'
     )
+    subprocess.Popen(["bash", "-lc", cmd], start_new_session=True,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return {
         "launched": True,
-        "note": ("RViz2 launched. The SR5 model and scan path are NOT loaded yet "
-                 "— that needs the SR5 robot description (URDF + meshes) plus a "
-                 "joint-state/marker bridge, which aren't installed on this host."),
+        "note": ("Launching the SR5 in RViz via the Humble container, with a "
+                 "joint-slider window — drag to move the arm. The first launch "
+                 "builds the workspace, so RViz can take a moment to appear. "
+                 "(Rail and scan-path overlay not included yet.)"),
     }
 
 
