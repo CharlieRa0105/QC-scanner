@@ -18,3 +18,6 @@ ros2_ws/src/rokae_ros2/
 
 # OS
 .DS_Store
+
+# local WSL build helper (machine-specific path)
+ros2_ws/build_local.sh
