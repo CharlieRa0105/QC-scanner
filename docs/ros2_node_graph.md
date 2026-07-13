@@ -128,3 +128,24 @@ graph TD
 7. **Services/actions vs topics** — one-shot commands (`setScanner`, a capture
    request) and long-running moves may fit ROS 2 **services**/**actions** better
    than fire-and-forget topics. See [[ROS 2 Theory — Beginner to Advanced]].
+
+## Implementation status (ArmDriver + RailDriver)
+
+Implemented in [../ros2_ws/src](../ros2_ws/src): `sr5_arm_driver` = **ArmDriver**,
+`rail_driver` = **RailDriver** — the thin command-in / position-out layers above.
+
+| Topic | Type (implemented) | Direction |
+|-------|--------------------|-----------|
+| `armCMD` | `std_msgs/Float64MultiArray` `[j1..j6, speed_mm/s]` | → ArmDriver |
+| `armPos` | `sensor_msgs/JointState` (6 joints, rad) | ArmDriver → |
+| `railCMD` | `std_msgs/Float64MultiArray` `[position_m, speed_mm/s]` | → RailDriver |
+| `railPos` | `sensor_msgs/JointState` (1 prismatic, m) | RailDriver → |
+
+- Message **types were TBD** above; the table records the choices.
+- Each driver has a **`mock` backend (default)** + a real one (`rokae`/`roboteq`).
+- The driver backends are pure Python and are **also used by the operator console**
+  (`../backend/robot_bridge.py` reuses `sr5_arm_driver.backends`), so there is one
+  robot-driver implementation. The SDK permits one session — don't run the console's
+  real connection and the ROS 2 ArmDriver against the same arm at once.
+- Topic names kept camelCase per this doc; if **Q6 (snake_case)** is adopted it's a
+  one-line change per topic. See [../ros2_ws/src/README.md](../ros2_ws/src/README.md).
