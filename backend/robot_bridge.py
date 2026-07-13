@@ -1,57 +1,52 @@
 """
 robot_bridge.py
 
-Real connection layer between the operator console and the ROKAE xMate SR5,
-via the vendor xCore Python SDK.
+Connection layer between the operator console and the ROKAE xMate SR5.
 
-The SDK API (see the "Rokae xCore Python SDK Cheat Sheet"):
-    robot = xCoreSDK_python.xMateRobot(ip)
-    ec = {}
-    robot.connectToRobot(ec)          # ec["message"] == "" on success
-    robot.robotInfo(ec)               # .id .version .type .joint_num .mac
-    robot.powerState(ec) / operateMode(ec)
-    robot.jointPos(ec)                # 6 joint angles, radians
-    robot.jointVel(ec) / jointTorque(ec)
-    robot.disconnectFromRobot(ec)
+The robot-driver code is taken from the project's ROS 2 arm driver package
+(`ros2_ws/src/sr5_arm_driver`): its backend classes are pure-Python (no rclpy),
+so the console reuses the SAME driver implementation that the ROS 2 `ArmDriver`
+node uses — one source of truth for talking to the arm:
 
-Two SDK sources, identical API (the vendor ships the real one; Ra built a mock
-that registers under the same `Release.linux` import path so the same code runs
-with no arm attached):
-  * real: a compiled xCoreSDK-Python build (Release/linux/xCoreSDK_python.*.so)
-  * mock: a pure-Python stand-in (mock_sdk/xCoreSDK_python.py)
+  * real: `sr5_arm_driver.backends.RokaeArm`  -> xCore SDK (Release/linux/*.so)
+  * mock: `sr5_arm_driver.backends.MockArm`   -> pure-Python simulation
+
+This bridge is a thin adapter: it selects real/mock per env, owns the single
+SDK session (the SDK allows only one TCP session to the controller), and
+formats status/telemetry for the HTTP API. It only ever READS — no motion is
+commanded from the console (motion goes through the ROS 2 ArmDriver / teach GUI).
 
 Mode selection (env QC_ROBOT_MODE = auto | real | mock, default auto):
-  * real  -> only the real SDK; error if it can't load / arm unreachable
-  * mock  -> only the mock (safe anywhere, no network)
-  * auto  -> use the real SDK iff it imports AND the arm pings within a short
-             timeout; otherwise fall back to the mock. `kind` in the status
-             always says which actually loaded, so the UI is never misleading.
+  * real  -> RokaeArm only; error if the SDK can't load / arm unreachable
+  * mock  -> MockArm only (safe anywhere, no network)
+  * auto  -> RokaeArm iff the arm pings AND the SDK connects, else MockArm.
+             `kind` in the status always says which actually loaded.
 
-Everything is guarded by a lock: the SDK holds one TCP session to the
-controller and must not be called concurrently from multiple request threads.
+Env:
+  QC_ROBOT_IP   default 192.168.2.160     SR5 address
+  QC_ROBOT_MODE default auto              auto | real | mock
+  QC_SDK_PATH   default ~/rokae_sdk       Linux xCore SDK root (contains Release/linux/)
 """
 
+import math
 import os
 import subprocess
 import sys
 import threading
-import types
 from pathlib import Path
 
 DEFAULT_IP = os.environ.get("QC_ROBOT_IP", "192.168.2.160")
 MODE = os.environ.get("QC_ROBOT_MODE", "auto").lower()
+SDK_ROOT = os.environ.get("QC_SDK_PATH") or os.path.expanduser("~/rokae_sdk")
 
-# Candidate real-SDK repo roots (each expected to contain Release/linux/).
-_REAL_SDK_PATHS = [
-    os.environ.get("QC_SDK_PATH"),
-    "~/rokaeProject/xCoreSDK-Python",
-    "~/Documents/arm test/xCoreSDK-Python",
-]
-# Directory containing the `mock_sdk` package.
-_MOCK_SDK_DIR = os.environ.get("QC_MOCK_SDK_DIR", "~/Documents/arm test")
+# Make the ROS 2 arm-driver package importable (its backends are plain Python).
+_ARM_PKG = Path(__file__).resolve().parent.parent / "ros2_ws" / "src" / "sr5_arm_driver"
+if str(_ARM_PKG) not in sys.path:
+    sys.path.insert(0, str(_ARM_PKG))
+from sr5_arm_driver.backends import MockArm, RokaeArm  # noqa: E402  (project driver code)
 
-# SR5 joint labels for the UI (6 revolute joints; the rail is a separate axis
-# the SDK doesn't expose, handled elsewhere).
+# SR5 joint labels for the UI (6 revolute joints; the rail is a separate axis,
+# driven by the RailDriver in ros2_ws/src/rail_driver).
 JOINT_NAMES = ["J1 · base", "J2 · shoulder", "J3 · elbow",
                "J4 · wrist 1", "J5 · wrist 2", "J6 · wrist 3"]
 
@@ -68,122 +63,66 @@ def _ping(ip, timeout_s=1):
         return False
 
 
-def _import_real_sdk():
-    """Try to import the real compiled SDK. Returns the module or None.
-
-    Note: the compiled .so targets a specific Python ABI; on a mismatched
-    interpreter this import fails and we fall back to the mock (auto mode).
-    """
-    for p in _REAL_SDK_PATHS:
-        if not p:
-            continue
-        repo = Path(os.path.expanduser(p))
-        if not (repo / "Release" / "linux").exists():
-            continue
-        sys.path.insert(0, str(repo))
-        try:
-            from Release.linux import xCoreSDK_python as sdk  # type: ignore
-            return sdk
-        except Exception:
-            continue
-    return None
-
-
-def _import_mock_sdk():
-    """Register the mock under `Release.linux.xCoreSDK_python` and return it.
-
-    Mirrors run_sim.py's install_mock(): build the fake Release -> Release.linux
-    package chain in sys.modules so `from Release.linux import xCoreSDK_python`
-    resolves to the mock.
-    """
-    mock_dir = Path(os.path.expanduser(_MOCK_SDK_DIR))
-    if not (mock_dir / "mock_sdk").is_dir():
-        return None
-    sys.path.insert(0, str(mock_dir))
-    try:
-        from mock_sdk import xCoreSDK_python as mock  # type: ignore
-    except Exception:
-        return None
-    release = types.ModuleType("Release")
-    release.__path__ = []
-    linux = types.ModuleType("Release.linux")
-    linux.__path__ = []
-    linux.xCoreSDK_python = mock
-    sys.modules.setdefault("Release", release)
-    sys.modules["Release.linux"] = linux
-    sys.modules["Release.linux.xCoreSDK_python"] = mock
-    return mock
-
-
-def _select_sdk(ip):
-    """Pick and import an SDK per MODE. Returns (module, kind, note)."""
-    if MODE == "mock":
-        m = _import_mock_sdk()
-        return (m, "mock", "" if m else "mock SDK not found")
-    if MODE == "real":
-        m = _import_real_sdk()
-        if not m:
-            return (None, None, "real SDK could not be imported")
-        return (m, "real", "")
-    # auto: prefer real iff importable AND arm reachable, else mock.
-    real = _import_real_sdk()
-    if real is not None and _ping(ip):
-        return (real, "real", "")
-    m = _import_mock_sdk()
-    if m:
-        note = "arm unreachable" if real is not None else "real SDK unavailable on this Python"
-        return (m, "mock", f"auto: {note}, using mock")
-    if real is not None:
-        return (real, "real", "arm unreachable but mock unavailable")
-    return (None, None, "no SDK available (real import failed, mock not found)")
-
-
 class RobotBridge:
-    """Owns a single SR5 connection and serialises SDK access."""
+    """Owns a single SR5 connection (via the project's arm driver backend) and
+    serialises access. Read-only w.r.t. motion."""
 
     def __init__(self):
         self._lock = threading.Lock()
-        self._sdk = None
-        self._robot = None
+        self._arm = None
         self._kind = None          # 'real' | 'mock' | None
         self._ip = DEFAULT_IP
         self._connected = False
         self._note = ""
 
+    # -- backend logging sink (capture the last driver message for the UI note) --
+    def _blog(self, msg):
+        self._note = str(msg)
+
     def connect(self, ip=None):
-        """Load an SDK (per MODE) and open a connection. Idempotent-ish:
-        a fresh connect replaces any existing one."""
+        """Load a driver backend (per MODE) and open a connection. A fresh
+        connect replaces any existing session."""
         with self._lock:
             self._ip = ip or self._ip or DEFAULT_IP
-            self._disconnect_locked()  # drop any stale session first
+            self._teardown_locked()
 
-            sdk, kind, note = _select_sdk(self._ip)
-            self._sdk, self._kind, self._note = sdk, kind, note
-            if sdk is None:
-                self._connected = False
-                return self._status_locked()
+            want_real = MODE == "real" or (MODE == "auto" and _ping(self._ip))
+            if want_real:
+                try:
+                    arm = RokaeArm(ip=self._ip, sdk_root=SDK_ROOT, log=self._blog)
+                    arm.connect()                       # imports SDK + opens session
+                    self._arm, self._kind, self._connected = arm, "real", True
+                    self._note = ""
+                    return self._status_locked()
+                except Exception as e:  # noqa: BLE001
+                    if MODE == "real":
+                        self._kind, self._connected = "real", False
+                        self._note = f"real connect failed: {e}"
+                        return self._status_locked()
+                    pending = f"auto: real unavailable ({e}); using mock"
+            else:
+                pending = "" if MODE == "mock" else "auto: arm unreachable; using mock"
 
-            ec = {}
-            self._robot = sdk.xMateRobot(self._ip)
-            self._robot.connectToRobot(ec)
-            msg = ec.get("message", "") if isinstance(ec, dict) else ""
-            self._connected = (msg == "")
-            if not self._connected:
-                self._note = (self._note + "; " if self._note else "") + f"connect failed: {msg}"
+            # mock fallback / explicit mock
+            arm = MockArm(log=self._blog)
+            arm.connect()
+            arm.set_power(True)                         # so telemetry reads as live
+            self._arm, self._kind, self._connected = arm, "mock", True
+            self._note = pending
             return self._status_locked()
 
     def disconnect(self):
         with self._lock:
-            self._disconnect_locked()
+            self._teardown_locked()
             return self._status_locked()
 
-    def _disconnect_locked(self):
-        if self._robot is not None and self._connected:
+    def _teardown_locked(self):
+        if self._arm is not None:
             try:
-                self._robot.disconnectFromRobot({})
+                self._arm.disconnect()
             except Exception:
                 pass
-        self._robot = None
+        self._arm = None
         self._connected = False
 
     def status(self):
@@ -191,49 +130,32 @@ class RobotBridge:
             return self._status_locked()
 
     def _status_locked(self):
-        s = {
-            "connected": self._connected,
-            "kind": self._kind,          # which SDK loaded: real / mock / None
-            "ip": self._ip,
-            "note": self._note,
-        }
-        if self._connected and self._robot is not None:
-            ec = {}
+        s = {"connected": self._connected, "kind": self._kind,
+             "ip": self._ip, "note": self._note}
+        if self._connected and self._arm is not None:
             try:
-                s["sdkVersion"] = str(self._robot.sdkVersion())
-                info = self._robot.robotInfo(ec)
-                s["info"] = {"id": getattr(info, "id", None),
-                             "type": getattr(info, "type", None),
-                             "version": getattr(info, "version", None),
-                             "jointNum": getattr(info, "joint_num", None)}
-                s["power"] = str(self._robot.powerState(ec))
-                s["mode"] = str(self._robot.operateMode(ec))
+                info = self._arm.device_info()
+                s["info"] = {"id": info.get("id"), "type": info.get("type"),
+                             "version": info.get("version"), "jointNum": info.get("joint_num")}
+                s["power"] = info.get("power")
+                s["mode"] = info.get("mode")
+                s["sdkVersion"] = info.get("sdk_version")
             except Exception as e:  # noqa: BLE001
                 s["note"] = (self._note + "; " if self._note else "") + f"status read error: {e}"
         return s
 
     def joints(self):
-        """Return live joint state, angles in DEGREES for the UI.
-
-        Only ever reads (jointPos/Vel/Torque) — never commands motion.
-        """
-        import math
+        """Live joint state, angles in DEGREES for the UI. Read-only."""
         with self._lock:
-            if not (self._connected and self._robot is not None):
+            if not (self._connected and self._arm is not None):
                 return {"connected": False, "joints": []}
-            ec = {}
             try:
-                pos = list(self._robot.jointPos(ec))
+                self._arm.update(0.0)                   # refresh cache (real polls live)
+                pos = self._arm.get_joints()
+                vel = self._arm.get_velocities()
+                tq = self._arm.get_torques()
             except Exception as e:  # noqa: BLE001
                 return {"connected": True, "joints": [], "error": str(e)}
-            try:
-                vel = list(self._robot.jointVel(ec))
-            except Exception:
-                vel = [0.0] * len(pos)
-            try:
-                tq = list(self._robot.jointTorque(ec))
-            except Exception:
-                tq = [0.0] * len(pos)
             out = []
             for i, p in enumerate(pos):
                 out.append({

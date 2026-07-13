@@ -49,7 +49,7 @@ This is the **first** integration slice. Only path generation is real.
 | GUI area | Backed by |
 | --- | --- |
 | **Generate scan path** (Load CAD → Preview) | **REAL** — `POST /api/plan` runs `cad_loader → normal_estimation → waypoint_generator → incidence_cone_modifier` and returns the real waypoint count, line count, bbox, mesh stats, incidence, and a decimated waypoint preview. |
-| **Robot connection** (header status dot + IP) | **REAL** — `robot_bridge.py` opens a real xCore SDK session (`/api/robot/connect`, `/api/robot/status`). Uses the real SDK when the arm is reachable on a compatible Python, else the **mock SDK** (label shows "Connected · mock"). Offline → honestly shows "Offline". |
+| **Robot connection** (header status dot + IP) | **REAL** — `robot_bridge.py` connects via the **project's arm driver** (`ros2_ws/src/sr5_arm_driver` → `RokaeArm`) on a real xCore SDK session (`/api/robot/connect`, `/api/robot/status`). Falls back to the driver's `MockArm` when the arm is unreachable / SDK unavailable (label shows "Connected · mock"). Offline → honestly shows "Offline". |
 | **Debug joint telemetry** | **REAL** — `/api/robot/joints` streams live `jointPos`/`jointVel`/`jointTorque` from the connected arm (real or mock). The slider/field set a local target; motion command is **not** wired (safety). |
 | **RViz launch** | **REAL launch** — `/api/rviz/launch` spawns `rviz2` in the host ROS2 env. It opens **empty**: the SR5 model + scan path need the robot description (URDF+meshes) + a joint/marker bridge, which aren't on this host yet. |
 | Analytics / scan history / heatmap | **Empty state** — no QC results store exists, so it shows "No scan data yet" instead of fabricated dashboards. |
@@ -57,16 +57,19 @@ This is the **first** integration slice. Only path generation is real.
 
 ### Robot connection (`robot_bridge.py`)
 
-xCore SDK, real or mock. Env vars:
+The robot-driver code is **taken from the project's ROS 2 arm driver**
+(`ros2_ws/src/sr5_arm_driver`): the bridge wraps its pure-Python backend classes
+(`RokaeArm` real / `MockArm` mock), so the console and the ROS 2 `ArmDriver` node
+share one driver implementation. No `rclpy` needed here — the backends are plain
+Python. Env vars:
 
 | Var | Default | Meaning |
 | --- | --- | --- |
-| `QC_ROBOT_MODE` | `auto` | `auto` (real iff importable + arm pings, else mock) / `real` / `mock` |
+| `QC_ROBOT_MODE` | `auto` | `auto` (real iff arm pings + SDK connects, else mock) / `real` / `mock` |
 | `QC_ROBOT_IP` | `192.168.2.160` | SR5 address |
-| `QC_SDK_PATH` | — | real SDK repo (contains `Release/linux/`) |
-| `QC_MOCK_SDK_DIR` | `~/Documents/arm test` | dir containing the `mock_sdk` package |
+| `QC_SDK_PATH` | `~/rokae_sdk` | Linux xCore SDK root (contains `Release/linux/`) |
 
-Endpoints: `GET /api/robot/status`, `GET /api/robot/joints`, `POST /api/robot/connect` `{ip?}`, `POST /api/robot/disconnect`. All read-only w.r.t. motion — no move commands are exposed.
+Endpoints: `GET /api/robot/status`, `GET /api/robot/joints`, `POST /api/robot/connect` `{ip?}`, `POST /api/robot/disconnect`. All read-only w.r.t. motion — motion is driven through the ROS 2 `ArmDriver` / teach GUI, not the console. Note the SDK allows only **one** session, so don't run the console's real connection and the ROS 2 `ArmDriver` against the same arm at once.
 
 As those subsystems get built, add endpoints here and wire the matching GUI
 handler (they currently live in the `<script data-dc-script>` block of

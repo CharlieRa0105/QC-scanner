@@ -15,3 +15,6 @@ build/
 
 # OS
 .DS_Store
+
+# local WSL build helper (machine-specific path)
+ros2_ws/build_local.sh
