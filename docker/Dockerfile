@@ -16,6 +16,9 @@ SHELL ["/bin/bash", "-c"]
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
         ros-humble-joint-state-publisher-gui \
         ros-humble-joint-state-publisher \
+        ros-humble-moveit \
+        ros-humble-ros2-control \
+        ros-humble-ros2-controllers \
     && rm -rf /var/lib/apt/lists/*
 
 # Source ROS2 for every interactive shell.

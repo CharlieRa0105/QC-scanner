@@ -275,7 +275,9 @@ def launch_rviz():
     real workspace.
     """
     import shutil
+    import shlex
     import subprocess
+    import time
 
     repo = Path(os.environ.get("QC_REPO_DIR") or REPO_ROOT)
 
@@ -290,10 +292,18 @@ def launch_rviz():
                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
         return {"launched": False, "reason": "qc-humble image not built — run docker/build.sh"}
 
-    # Allow the container to reach the host X server, then detached docker run.
-    subprocess.run(["bash", "-lc", "xhost +local:root >/dev/null 2>&1 || true"])
-    cmd = (
-        'docker run --rm -d --net=host '
+    # Remove any prior arm-view container (avoids a volume/X collision) and let
+    # the container reach the host X server. NOTE: no --rm on the run below, so
+    # if it dies on startup we can still read its logs to report why.
+    subprocess.run(["bash", "-lc",
+                    "docker rm -f qc_arm_viz >/dev/null 2>&1; "
+                    "xhost +local:root >/dev/null 2>&1 || true"])
+
+    inner = ("source /opt/ros/humble/setup.bash && cd /ros2_ws && "
+             "colcon build --packages-select rokae_description && "
+             "source install/setup.bash && ros2 launch /view_arm.launch.py")
+    run = (
+        'docker run -d --name qc_arm_viz --net=host '
         '-e DISPLAY="$DISPLAY" -e QT_X11_NO_MITSHM=1 '
         '-e LIBGL_ALWAYS_SOFTWARE=1 -e XDG_RUNTIME_DIR=/tmp/runtime-root '
         '-v /tmp/.X11-unix:/tmp/.X11-unix '
@@ -301,18 +311,32 @@ def launch_rviz():
         f'-v "{repo}/docker/view_arm.launch.py:/view_arm.launch.py:ro" '
         f'-v "{repo}/docker/view_arm.rviz:/view_arm.rviz:ro" '
         '-v qc_humble_build:/ros2_ws/build -v qc_humble_install:/ros2_ws/install '
-        'qc-humble bash -lc "source /opt/ros/humble/setup.bash && cd /ros2_ws && '
-        'colcon build --packages-select rokae_description >/dev/null && '
-        'source install/setup.bash && ros2 launch /view_arm.launch.py"'
+        f'qc-humble bash -lc {shlex.quote(inner)}'
     )
-    subprocess.Popen(["bash", "-lc", cmd], start_new_session=True,
-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # -d returns quickly with the container id (or a non-zero + error). Capture
+    # it instead of firing blind, so real launch failures reach the UI.
+    p = subprocess.run(["bash", "-lc", run], capture_output=True, text=True)
+    if p.returncode != 0:
+        return {"launched": False,
+                "reason": ("docker run failed: " + (p.stderr.strip() or p.stdout.strip()))[:400]}
+
+    # Give it a moment; if the container exited (bad X access, build error, …),
+    # surface its logs rather than claiming success.
+    time.sleep(3)
+    alive = subprocess.run(["docker", "ps", "-q", "--filter", "name=qc_arm_viz"],
+                           capture_output=True, text=True).stdout.strip()
+    if not alive:
+        logs = subprocess.run(["bash", "-lc", "docker logs qc_arm_viz 2>&1 | tail -20"],
+                              capture_output=True, text=True).stdout
+        return {"launched": False,
+                "reason": "RViz container exited on startup — see log",
+                "log": logs[-1600:]}
+
     return {
         "launched": True,
         "note": ("Launching the SR5 in RViz via the Humble container, with a "
                  "joint-slider window — drag to move the arm. The first launch "
-                 "builds the workspace, so RViz can take a moment to appear. "
-                 "(Rail and scan-path overlay not included yet.)"),
+                 "builds the workspace, so RViz can take a moment to appear."),
     }
 
 

@@ -170,7 +170,7 @@
                   <div style="width:56px;height:56px;border-radius:10px;background:var(--color-blue-50);display:flex;align-items:center;justify-content:center">
                     <svg width="26" height="26" fill="none" stroke="var(--color-blue-500)" stroke-width="2"><use href="assets/icons.svg#atom"/></svg>
                   </div>
-                  <div style="max-width:360px;font-size:13px;color:var(--color-charcoal-600)">Path ready. Launch RViz2 on the operator PC to inspect reachability and clearances before running.</div>
+                  <div style="max-width:360px;font-size:13px;color:var(--color-charcoal-600)">Launch RViz2 on the host to view the SR5 arm and move it with the joint sliders. Opens in the Humble container.</div>
                   <button onClick="{{ openRviz }}" style="height:46px;padding:0 22px;border:0;border-radius:6px;background:#000;color:#fff;font-weight:700;font-size:14px;font-family:var(--font-sans);cursor:pointer;display:inline-flex;align-items:center;gap:8px"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><use href="assets/icons.svg#atom"/></svg>Open in RViz</button>
                 </div>
               </sc-if>
@@ -1680,10 +1680,12 @@ class Component extends DCLogic {
       // external RViz launcher
       pathGenerated: ['plan','pass1','pass2','result'].includes(stage),
       rvizIdle: s.rviz==='idle', rvizOpening: s.rviz==='opening', rvizOpen: s.rviz==='open',
-      rvizDisabledState: s.rviz==='idle' && !['plan','pass1','pass2','result'].includes(stage),
-      rvizReadyState: s.rviz==='idle' && ['plan','pass1','pass2','result'].includes(stage),
+      // RViz now shows the ARM (not the scan path), so it's available anytime —
+      // no longer gated on having generated a path.
+      rvizDisabledState: false,
+      rvizReadyState: s.rviz==='idle',
       openRviz:this.openRviz, closeRviz:this.closeRviz,
-      rvizStatusLabel: s.rviz==='open'?'Window open':(s.rviz==='opening'?'Launching…':(['plan','pass1','pass2','result'].includes(stage)?'Ready':'Idle')),
+      rvizStatusLabel: s.rviz==='open'?'Window open':(s.rviz==='opening'?'Launching…':'Ready'),
       rvizStatusBg: s.rviz==='open'?'#E7F5E8':(s.rviz==='opening'?'#EEE7FC':'#F6F7F4'),
       rvizStatusFg: s.rviz==='open'?'#125D1A':(s.rviz==='opening'?'#5631EA':'var(--color-charcoal-600)'),
       rvizLiveLine: scanning?('Executing trajectory · waypoint '+Math.round(progressPct/100*(this.waypointCount||66))+' / '+(this.waypointCount||66)):(stage==='result'?'Trajectory playback complete':'Previewing planned toolpath · '+(this.waypointCount||66)+' waypoints'),

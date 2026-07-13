@@ -45,13 +45,15 @@ project_datas = [
 
 a = Analysis(
     ["app.py"],
-    pathex=["libs", "scripts", "backend"],
+    pathex=["libs", "scripts", "backend", "ros2_ws/src/sr5_arm_driver"],
     binaries=gmsh_bins + np_bins + wv_bins,
     datas=project_datas + gmsh_datas + np_datas + wv_datas,
     hiddenimports=gmsh_hidden + np_hidden + wv_hidden + [
         # imported at runtime through sys.path; name them so they're bundled.
         "server",
         "robot_bridge",
+        "sr5_arm_driver",
+        "sr5_arm_driver.backends",
         "plan_path",
         "libs.path_planning.cad_loader",
         "libs.path_planning.normal_estimation",

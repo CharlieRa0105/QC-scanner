@@ -12,11 +12,16 @@ if ! docker image inspect qc-humble >/dev/null 2>&1; then
   echo "image qc-humble not found — building it first"; "$REPO/docker/build.sh"
 fi
 
+# Remove any previous arm-view container so it can't collide over the shared
+# build/install volumes or the X display (the usual "fails to open" cause).
+docker rm -f qc_arm_viz >/dev/null 2>&1 || true
+
 # Allow the container to talk to the host X server (revoked on exit).
 xhost +local:root >/dev/null 2>&1 || true
 trap 'xhost -local:root >/dev/null 2>&1 || true' EXIT
 
 docker run --rm -it \
+  --name qc_arm_viz \
   --net=host \
   -e DISPLAY="$DISPLAY" \
   -e QT_X11_NO_MITSHM=1 \

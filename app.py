@@ -54,6 +54,18 @@ sys.path.insert(0, os.path.join(BASE_DIR, "backend"))
 # Pin the backend's data root to our base dir so gui/ and config/cad resolve
 # whether we're running from source or from a frozen one-file bundle.
 os.environ.setdefault("QC_BASE_DIR", BASE_DIR)
+
+# The RViz-in-Docker launch needs the REAL repo on disk (ros2_ws meshes +
+# docker/ launch files), which are NOT bundled. From source, REPO_ROOT already
+# points at the repo. When frozen, the binary lives at <repo>/dist/qc-console,
+# so default the repo dir to two levels up. Override with QC_REPO_DIR if you
+# move the binary elsewhere.
+if getattr(sys, "frozen", False):
+    os.environ.setdefault(
+        "QC_REPO_DIR",
+        os.path.dirname(os.path.dirname(os.path.abspath(sys.executable))),
+    )
+
 import server as backend  # noqa: E402  (path set up above)
 
 

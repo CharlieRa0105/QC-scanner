@@ -43,7 +43,7 @@ SDK_ROOT = os.environ.get("QC_SDK_PATH") or os.path.expanduser("~/rokae_sdk")
 _ARM_PKG = Path(__file__).resolve().parent.parent / "ros2_ws" / "src" / "sr5_arm_driver"
 if str(_ARM_PKG) not in sys.path:
     sys.path.insert(0, str(_ARM_PKG))
-from sr5_arm_driver.backends import MockArm, RokaeArm  # noqa: E402  (project driver code)
+from sr5_arm_driver.backends import RokaeArm  # noqa: E402  (project driver code)
 
 # SR5 joint labels for the UI (6 revolute joints; the rail is a separate axis,
 # driven by the RailDriver in ros2_ws/src/rail_driver).
@@ -80,35 +80,28 @@ class RobotBridge:
         self._note = str(msg)
 
     def connect(self, ip=None):
-        """Load a driver backend (per MODE) and open a connection. A fresh
-        connect replaces any existing session."""
+        """Open a connection to the REAL SR5. There is no mock — if the arm
+        isn't reachable / the SDK can't connect, we stay honestly disconnected.
+        A fresh connect replaces any existing session."""
         with self._lock:
             self._ip = ip or self._ip or DEFAULT_IP
             self._teardown_locked()
 
-            want_real = MODE == "real" or (MODE == "auto" and _ping(self._ip))
-            if want_real:
-                try:
-                    arm = RokaeArm(ip=self._ip, sdk_root=SDK_ROOT, log=self._blog)
-                    arm.connect()                       # imports SDK + opens session
-                    self._arm, self._kind, self._connected = arm, "real", True
-                    self._note = ""
-                    return self._status_locked()
-                except Exception as e:  # noqa: BLE001
-                    if MODE == "real":
-                        self._kind, self._connected = "real", False
-                        self._note = f"real connect failed: {e}"
-                        return self._status_locked()
-                    pending = f"auto: real unavailable ({e}); using mock"
-            else:
-                pending = "" if MODE == "mock" else "auto: arm unreachable; using mock"
+            # Cheap reachability gate first so a missing arm fails fast (no long
+            # SDK timeout) and reads as plainly disconnected.
+            if not _ping(self._ip):
+                self._kind, self._connected = None, False
+                self._note = f"arm not reachable at {self._ip}"
+                return self._status_locked()
 
-            # mock fallback / explicit mock
-            arm = MockArm(log=self._blog)
-            arm.connect()
-            arm.set_power(True)                         # so telemetry reads as live
-            self._arm, self._kind, self._connected = arm, "mock", True
-            self._note = pending
+            try:
+                arm = RokaeArm(ip=self._ip, sdk_root=SDK_ROOT, log=self._blog)
+                arm.connect()                           # imports SDK + opens session
+                self._arm, self._kind, self._connected = arm, "real", True
+                self._note = ""
+            except Exception as e:  # noqa: BLE001
+                self._arm, self._kind, self._connected = None, None, False
+                self._note = f"connect failed: {e}"
             return self._status_locked()
 
     def disconnect(self):
