@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=QC Scanner Console
+Comment=Dexory 3D Scan QC operator interface (Scan Cell 01)
+# Path is filled in per machine — point Exec/Path at the built binary in dist/.
+# From a terminal you can also just run ./dist/qc-console directly.
+Exec=sh -c '"$(dirname "%k")/dist/qc-console"'
+Path=
+Terminal=false
+Categories=Utility;Science;Engineering;

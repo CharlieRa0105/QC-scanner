@@ -9,5 +9,9 @@ __pycache__/
 .venv/
 .pytest_cache/
 
+# Desktop-app build artifacts (PyInstaller) — rebuilt from qc_console.spec
+dist/
+build/
+
 # OS
 .DS_Store

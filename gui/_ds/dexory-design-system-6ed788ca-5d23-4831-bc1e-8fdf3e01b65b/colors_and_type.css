@@ -1,0 +1,351 @@
+/* ============================================================
+   Dexory Design System — tokens
+   Colors, typography, spacing, elevation, radii.
+   Source: /Foundation/* in the Dexory Design System [V2] Figma.
+   ============================================================ */
+
+/* Fonts
+   ----------------------------------------------------------------
+   Inter — brand-supplied variable TTF covers weight 100–900 +
+           italic in two files. Prefer the variable font; explicit
+           @font-face means no external request.
+   Roboto Mono — still loaded from Google Fonts; no brand-supplied
+                 file. If a licensed copy is added to /fonts/,
+                 swap the @import below for a matching @font-face.
+   ---------------------------------------------------------------- */
+/* Offline (2026-07-13): remote Roboto Mono @import disabled so the shop-floor
+   console makes zero external network calls. --font-mono falls back to the
+   system monospace chain (ui-monospace, SF Mono, Menlo, Consolas, monospace),
+   which is purely cosmetic. To restore the exact Roboto Mono face, vendor its
+   woff2 files locally and add a matching @font-face here.
+@import url("https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;500;700&display=swap"); */
+
+@font-face {
+  font-family: "Inter";
+  src: url("fonts/Inter-VariableFont_opsz_wght__1_.ttf") format("truetype-variations"),
+       url("fonts/Inter-VariableFont_opsz_wght__1_.ttf") format("truetype");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Inter";
+  src: url("fonts/Inter-Italic-VariableFont_opsz_wght.ttf") format("truetype-variations"),
+       url("fonts/Inter-Italic-VariableFont_opsz_wght.ttf") format("truetype");
+  font-weight: 100 900;
+  font-style: italic;
+  font-display: swap;
+}
+
+:root {
+  /* ---------- 01 Primitives ---------- */
+
+  /* Base */
+  --color-white: #ffffff;
+  --color-black: #000000;
+
+  /* Charcoal — neutral ramp used for surfaces, dividers, secondary text */
+  --color-charcoal-50:  #F1F7FF;
+  --color-charcoal-100: #EAF0FF;
+  --color-charcoal-200: #DFE5FD;
+  --color-charcoal-400: #AAB0C6;
+  --color-charcoal-500: #8A90A5;
+  --color-charcoal-600: #62687C;
+  --color-charcoal-700: #4F5568;
+  --color-charcoal-800: #313749;
+  --color-charcoal-900: #101727;
+
+  /* Gray — cooler neutral used for borders, muted backgrounds */
+  --color-gray-50:  #f9fafb;
+  --color-gray-100: #eceded;
+  --color-gray-200: #e5e7eb;
+  --color-gray-400: #cccdca;
+  --color-gray-500: #868784;
+  --color-gray-600: #5f605d;
+  --color-gray-800: #2f2f2d;
+
+  /* Lime — the Dexory accent */
+  --color-lime-500: #c3ef00;
+  --color-lime-600: #abc900;
+
+  /* Blue — informational / data-viz primary */
+  --color-blue-25:  #f5f7fc;
+  --color-blue-50:  #eee7fc;
+  --color-blue-100: #d8e0f0;
+  --color-blue-500: #5631ea;
+  --color-blue-600: #4825c4;
+
+  /* Dark Blue — deep surfaces, hero backgrounds */
+  --color-dark-blue-50:  #e5eaf5;
+  --color-dark-blue-100: #bec5d9;
+  --color-dark-blue-200: #95a0be;
+  --color-dark-blue-400: #4f6193;
+  --color-dark-blue-600: #1b2e63;
+  --color-dark-blue-900: #111f4c;
+
+  /* Green — success */
+  --color-green-50:  #e7f5e8;
+  --color-green-200: #a8d9ab;
+  --color-green-500: #45ae4a;
+  --color-green-700: #267c2c;
+  --color-green-800: #1f6023;
+  --color-green-900: #125d1a;
+
+  /* Amber — warning / history */
+  --color-amber-50:  #fef3c6;
+  --color-amber-100: #fde68a;
+  --color-amber-200: #fcd34d;
+  --color-amber-300: #fbbf24;
+  --color-amber-400: #f59e0b;
+  --color-amber-500: #d97706;
+  --color-amber-600: #b45309;
+  --color-amber-700: #92400e;
+  --color-amber-800: #78350f;
+  --color-amber-900: #7b3306;
+
+  /* Red — error */
+  --color-red-50:  #fff1f1;
+  --color-red-200: #ffd7d9;
+  --color-red-300: #ffb3b8;
+  --color-red-400: #ff8389;
+  --color-red-500: #da1e28;
+  --color-red-600: #a2191f;
+  --color-red-700: #750e13;
+  --color-red-800: #520408;
+
+  /* ---------- 02 Core (semantic) ---------- */
+
+  /* Content */
+  --color-fg-primary:        var(--color-black);
+  --color-fg-secondary:      var(--color-charcoal-600);   /* gray 600 */
+  --color-fg-tertiary:       var(--color-charcoal-500);
+  --color-fg-success:        var(--color-green-900);
+  --color-fg-warning:        var(--color-amber-900);
+  --color-fg-error:          var(--color-red-500);
+  --color-fg-accent:         var(--color-blue-500);
+  --color-fg-primary-inverse: var(--color-white);
+  --color-fg-accent-inverse:  var(--color-lime-500);
+
+  /* Background */
+  --color-bg-neutral:        var(--color-gray-50);
+  --color-bg-accent:         var(--color-blue-50);
+  --color-bg-black:          var(--color-black);
+  --color-bg-menu:           var(--color-charcoal-900);
+  --color-bg-dark-blue:      var(--color-dark-blue-900);
+  --color-bg-warning-light:  var(--color-amber-50);
+  --color-bg-error-light:    var(--color-red-50);
+  --color-bg-success-light:  var(--color-green-50);
+  --color-bg-history:        var(--color-amber-200);
+
+  /* Border */
+  --color-border-neutral:   var(--color-gray-100);
+  --color-border-inverse:   var(--color-white);
+  --color-border-strong:    var(--color-black);
+
+  /* ---------- 03 States (hover) ---------- */
+  --color-hover-neutral:        var(--color-gray-100);
+  --color-hover-black:          var(--color-charcoal-800);
+  --color-hover-accent-bg:      var(--color-blue-100);
+  --color-hover-accent:         var(--color-blue-600);
+  --color-hover-accent-inverse: var(--color-lime-600);
+
+  /* ---------- Elevation ---------- */
+  --elevation-medium: 0 4px 16px rgba(0, 0, 0, 0.12);
+  --elevation-high:   0 8px 32px rgba(0, 0, 0, 0.16);
+  --elevation-xs:     0 1px 2px rgba(16, 24, 40, 0.05);
+  --elevation-sm:     0 1px 3px rgba(16, 24, 40, 0.06), 0 1px 2px rgba(16, 24, 40, 0.04);
+
+  /* ---------- Spacing (8-point) ---------- */
+  --space-xs:  8px;
+  --space-sm:  16px;
+  --space-md:  24px;
+  --space-lg:  40px;
+  --space-xl:  64px;
+  --space-xxl: 80px;
+
+  /* ---------- Radii ---------- */
+  --radius-badge:  4px;
+  --radius-button: 6px;
+  --radius-input:  6px;
+  --radius-card:   0px;     /* Dexory cards are square by default */
+  --radius-logo:   8px;     /* logomark only */
+
+  /* ---------- Type families ---------- */
+  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: "Roboto Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* ---------- Weights ---------- */
+  --weight-regular:  400;
+  --weight-medium:   500;
+  --weight-semibold: 600;
+  --weight-bold:     700;
+
+  /* ---------- Semantic type scale ---------- */
+  /* Display (marketing / page hero) — used sparingly */
+  --type-display-size:   48px;
+  --type-display-line:   60px;
+  --type-display-tracking: -0.02em;
+
+  /* Header */
+  --type-h-large-size: 32px;
+  --type-h-large-line: 40px;
+  --type-h-small-size: 20px;
+  --type-h-small-line: 30px;
+
+  /* Subhead (used in cards) */
+  --type-subhead-size: 30px;
+  --type-subhead-line: 38px;
+
+  /* Body */
+  --type-body-lg-size: 18px;
+  --type-body-lg-line: 28px;
+  --type-body-md-size: 16px;
+  --type-body-md-line: 24px;
+  --type-body-sm-size: 14px;
+  --type-body-sm-line: 20px;
+
+  /* Label */
+  --type-label-md-size: 14px;
+  --type-label-md-line: 20px;
+  --type-label-sm-size: 14px;
+  --type-label-sm-line: 20px;
+  --type-label-xs-size: 12px;
+  --type-label-xs-line: 16px;
+
+  /* Mono (numeric / code) */
+  --type-mono-size: 14px;
+  --type-mono-line: 20px;
+  --type-mono-xs-size: 12px;
+  --type-mono-xs-line: 16px;
+}
+
+/* ============================================================
+   Base reset + type classes
+   ============================================================ */
+html, body {
+  font-family: var(--font-sans);
+  font-size: var(--type-body-md-size);
+  line-height: var(--type-body-md-line);
+  color: var(--color-fg-primary);
+  background: var(--color-white);
+  font-weight: var(--weight-medium); /* default body is Inter Medium */
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Headings */
+.ds-display,
+h1.ds {
+  font-family: var(--font-sans);
+  font-weight: var(--weight-bold);
+  font-size: var(--type-display-size);
+  line-height: var(--type-display-line);
+  letter-spacing: var(--type-display-tracking);
+  color: var(--color-fg-primary);
+  margin: 0;
+}
+
+.ds-h-large,
+h2.ds {
+  font-family: var(--font-sans);
+  font-weight: var(--weight-bold);
+  font-size: var(--type-h-large-size);
+  line-height: var(--type-h-large-line);
+  letter-spacing: -0.01em;
+  color: var(--color-fg-primary);
+  margin: 0;
+}
+
+.ds-subhead {
+  font-family: var(--font-sans);
+  font-weight: var(--weight-bold);
+  font-size: var(--type-subhead-size);
+  line-height: var(--type-subhead-line);
+  color: var(--color-fg-primary);
+  margin: 0;
+}
+
+.ds-h-small,
+h3.ds {
+  font-family: var(--font-sans);
+  font-weight: var(--weight-bold);
+  font-size: var(--type-h-small-size);
+  line-height: var(--type-h-small-line);
+  color: var(--color-fg-primary);
+  margin: 0;
+}
+
+/* Body */
+.ds-body-lg {
+  font-family: var(--font-sans);
+  font-weight: var(--weight-medium);
+  font-size: var(--type-body-lg-size);
+  line-height: var(--type-body-lg-line);
+}
+.ds-body-md,
+p.ds {
+  font-family: var(--font-sans);
+  font-weight: var(--weight-medium);
+  font-size: var(--type-body-md-size);
+  line-height: var(--type-body-md-line);
+  margin: 0;
+}
+.ds-body-sm {
+  font-family: var(--font-sans);
+  font-weight: var(--weight-regular);
+  font-size: var(--type-body-sm-size);
+  line-height: var(--type-body-sm-line);
+}
+
+/* Label */
+.ds-label-md {
+  font-family: var(--font-sans);
+  font-weight: var(--weight-medium);
+  font-size: var(--type-label-md-size);
+  line-height: var(--type-label-md-line);
+}
+.ds-label-sm {
+  font-family: var(--font-sans);
+  font-weight: var(--weight-medium);
+  font-size: var(--type-label-sm-size);
+  line-height: var(--type-label-sm-line);
+}
+.ds-label-xs {
+  font-family: var(--font-sans);
+  font-weight: var(--weight-semibold);
+  font-size: var(--type-label-xs-size);
+  line-height: var(--type-label-xs-line);
+  letter-spacing: 0.02em;
+}
+
+.ds-eyebrow {
+  font-family: var(--font-sans);
+  font-weight: var(--weight-bold);
+  font-size: 18px;
+  line-height: 28px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--color-fg-primary);
+}
+
+/* Mono */
+.ds-mono {
+  font-family: var(--font-mono);
+  font-weight: var(--weight-medium);
+  font-size: var(--type-mono-size);
+  line-height: var(--type-mono-line);
+  font-feature-settings: "tnum";
+}
+.ds-mono-xs {
+  font-family: var(--font-mono);
+  font-weight: var(--weight-bold);
+  font-size: var(--type-mono-xs-size);
+  line-height: var(--type-mono-xs-line);
+  font-feature-settings: "tnum";
+}
+
+.ds-fg-secondary { color: var(--color-fg-secondary); }
+.ds-fg-error     { color: var(--color-fg-error); }
+.ds-fg-warning   { color: var(--color-fg-warning); }
+.ds-fg-success   { color: var(--color-fg-success); }
+.ds-fg-accent    { color: var(--color-fg-accent); }
