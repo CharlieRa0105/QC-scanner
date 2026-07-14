@@ -14,12 +14,21 @@ native window (falls back to the default browser if no webview backend):
 QC_HEADLESS=1 ./dist/qc-console      # server only, no window (for testing)
 ```
 
-Build it (Linux) with PyInstaller — see `qc_console.spec` / `scripts/build_console.sh`:
+> **Python version — read this first.** The ROKAE xCore SDK ships CPython
+> builds for **3.8–3.12 only**. The console must run under one of those or it
+> **cannot connect to the arm** — under 3.13+ the SDK import silently falls
+> through to an empty namespace dir and the arm stays "Offline" (this was the
+> "mock IP still connected" bug: the old build ran on 3.14, failed to load the
+> SDK, and fell back to a mock). This machine's system `python3` is 3.14, so
+> the repo keeps a pinned **3.12** env at `.venv312`.
+
+Build it (Linux) with PyInstaller — see `qc_console.spec` / `scripts/build_console.sh`.
+Set up the 3.12 env once with `uv` (drops a standalone 3.12, no system changes):
 
 ```bash
-python3 -m venv --system-site-packages .venv     # sees system numpy + gmsh
-.venv/bin/pip install pywebview pyinstaller
-scripts/build_console.sh                          # -> dist/qc-console
+uv venv --python 3.12 .venv312
+uv pip install --python .venv312/bin/python numpy gmsh pywebview pyinstaller
+scripts/build_console.sh                          # -> dist/qc-console (bundles 3.12)
 ```
 
 The desktop entry point is `app.py` (starts the backend on a free localhost
@@ -29,12 +38,15 @@ is a file-manager launcher template.
 > **Windows .exe:** PyInstaller cannot cross-compile. To get a `.exe`, run the
 > same `qc_console.spec` on a Windows machine.
 
-**B. Served website** — no build step, stdlib only:
+**B. Served website** — no build step:
 
 ```bash
-python3 backend/server.py            # http://127.0.0.1:8000
-scripts/run_console.sh               # same, convenience wrapper
+scripts/run_console.sh               # http://127.0.0.1:8000 (uses .venv312 + finds the SDK)
 ```
+
+`run_console.sh` runs under `.venv312` and auto-sets `QC_SDK_PATH`, so the arm
+connects. Running `python3 backend/server.py` directly uses the system 3.14 and
+will leave the arm Offline — use the wrapper (or `.venv312/bin/python`).
 
 Then open <http://127.0.0.1:8000/> in a browser.
 
@@ -70,7 +82,7 @@ access, and exposes both reads and motion commands. Env vars:
 | Var | Default | Meaning |
 | --- | --- | --- |
 | `QC_ROBOT_IP` | `192.168.2.160` | SR5 address |
-| `QC_SDK_PATH` | `~/rokae_sdk` | Linux xCore SDK root (contains `Release/linux/`) |
+| `QC_SDK_PATH` | auto | Linux xCore SDK root (contains `Release/linux/`). Auto-detected: probes `~/rokaeProject` then `~/rokae_sdk`; set to override. |
 | `QC_ALLOW_MOTION` | `1` | Master motion switch. `0` → bridge is read-only (all motion refused). |
 | `QC_JOG_SPEED` | `60` | Default jog end-effector speed, mm/s. |
 

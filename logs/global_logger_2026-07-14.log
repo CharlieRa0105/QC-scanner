@@ -1,0 +1,12 @@
+[I|2026-07-14 11:34:26.841 53315] uid: default_uid | xService 192.168.2.160:6666 connect
+[I|2026-07-14 11:34:26.886 53312] uid: 09e01669-ac39 | re-watch event: moveExecution 
+[I|2026-07-14 11:34:26.887 53312] uid: 09e01669-ac39 | Connect to 192.168.2.160 from 
+[I|2026-07-14 11:34:26.890 53315] uid: 09e01669-ac39 | xService 192.168.2.160:6666 disconnect
+[I|2026-07-14 11:34:26.894 53322] uid: 09e01669-ac39 | xService 192.168.2.160:6666 connect
+[I|2026-07-14 11:34:26.894 53322] uid: 09e01669-ac39 | re-watch event: moveExecution 
+[I|2026-07-14 11:34:26.938 53312] uid: 09e01669-ac39 | re-watch event: moveExecution 
+[I|2026-07-14 11:34:26.938 53312] uid: 09e01669-ac39 | Connect to 192.168.2.160 from 
+[I|2026-07-14 11:34:26.984 53312] uid: 09e01669-ac39 | setToolset end, Set toolset to tool0, wobj0, (0)
+[I|2026-07-14 11:34:27.043 53312] uid: 09e01669-ac39 | disableDrag end, rt:false (0)
+[I|2026-07-14 11:34:27.046 53322] uid: 09e01669-ac39 | xService 192.168.2.160:6666 disconnect
+[I|2026-07-14 11:34:27.050 53312] uid: 09e01669-ac39 | disconnectFromRobot end (0)

@@ -8,12 +8,19 @@ The robot-driver code is taken from the project's ROS 2 arm driver package
 so the console reuses the SAME driver implementation that the ROS 2 `ArmDriver`
 node uses — one source of truth for talking to the arm:
 
-  * real: `sr5_arm_driver.backends.RokaeArm`  -> xCore SDK (Release/linux/*.so)
-  * mock: `sr5_arm_driver.backends.MockArm`   -> pure-Python simulation
+  * `sr5_arm_driver.backends.RokaeArm`  -> xCore SDK (Release/linux/*.so)
 
-This bridge is a thin adapter: it selects the backend, owns the single SDK
-session (the SDK allows only one TCP session to the controller), serialises
-access, and formats status/telemetry for the HTTP API.
+There is NO mock backend: if the arm is unreachable, or the SDK cannot load,
+the bridge stays honestly disconnected rather than faking a session.
+
+This bridge is a thin adapter: it owns the single SDK session (the SDK allows
+only one TCP session to the controller), serialises access, and formats
+status/telemetry for the HTTP API.
+
+PYTHON VERSION (important): the xCore SDK ships CPython builds for 3.8-3.12
+ONLY. Under 3.13+ the `from Release.linux import xCoreSDK_python` import falls
+through to an empty namespace directory and connect fails with "No known robot
+class in SDK build". Run the console under Python 3.12 (see scripts/).
 
 Motion:
   The bridge exposes the arm's motion commands (power, drag/teach, jog, stop,
@@ -26,7 +33,7 @@ Motion:
 
 Env:
   QC_ROBOT_IP     default 192.168.2.160   SR5 address
-  QC_SDK_PATH     default ~/rokae_sdk     Linux xCore SDK root (contains Release/linux/)
+  QC_SDK_PATH     auto (~/rokaeProject or ~/rokae_sdk)  xCore SDK root (contains Release/linux/)
   QC_ALLOW_MOTION default 1               master motion switch (0 => read-only)
   QC_JOG_SPEED    default 60              default jog end-effector speed, mm/s
 """
@@ -39,7 +46,23 @@ import threading
 from pathlib import Path
 
 DEFAULT_IP = os.environ.get("QC_ROBOT_IP", "192.168.2.160")
-SDK_ROOT = os.environ.get("QC_SDK_PATH") or os.path.expanduser("~/rokae_sdk")
+
+
+def _resolve_sdk_root():
+    """Locate the xCore SDK root (the dir containing Release/linux/*.so).
+    Honour QC_SDK_PATH if set; otherwise probe the known install locations so a
+    bare `python3 backend/server.py` still finds it."""
+    env = os.environ.get("QC_SDK_PATH")
+    if env:
+        return os.path.expanduser(env)
+    for cand in ("~/rokaeProject", "~/rokae_sdk"):
+        p = os.path.expanduser(cand)
+        if os.path.isdir(os.path.join(p, "Release", "linux")):
+            return p
+    return os.path.expanduser("~/rokae_sdk")
+
+
+SDK_ROOT = _resolve_sdk_root()
 # Master motion switch. Any value other than 0/false/no leaves motion enabled.
 ALLOW_MOTION = os.environ.get("QC_ALLOW_MOTION", "1").lower() not in ("0", "false", "no", "")
 DEFAULT_JOG_SPEED = float(os.environ.get("QC_JOG_SPEED", "60"))  # mm/s end-effector

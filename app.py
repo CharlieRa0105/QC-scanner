@@ -55,6 +55,18 @@ sys.path.insert(0, os.path.join(BASE_DIR, "backend"))
 # whether we're running from source or from a frozen one-file bundle.
 os.environ.setdefault("QC_BASE_DIR", BASE_DIR)
 
+# The ROKAE xCore SDK lives OUTSIDE the bundle (it's a big vendor tree), so the
+# robot bridge needs to be told where it is. Honour an explicit QC_SDK_PATH,
+# else pick the first location that actually contains Release/linux/*.so. NOTE:
+# the SDK only ships CPython 3.8-3.12 builds, so this app must be built/run on
+# one of those (see scripts/build_console.sh) — under 3.13+ the import silently
+# fails and the arm stays Offline.
+if not os.environ.get("QC_SDK_PATH"):
+    for _cand in (os.path.expanduser("~/rokaeProject"), os.path.expanduser("~/rokae_sdk")):
+        if os.path.isdir(os.path.join(_cand, "Release", "linux")):
+            os.environ["QC_SDK_PATH"] = _cand
+            break
+
 # The RViz-in-Docker launch needs the REAL repo on disk (ros2_ws meshes +
 # docker/ launch files), which are NOT bundled. From source, REPO_ROOT already
 # points at the repo. When frozen, the binary lives at <repo>/dist/qc-console,

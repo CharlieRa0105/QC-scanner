@@ -12,20 +12,24 @@ Purpose / scope (2026-07-13):
          browser over http -- it self-fetches its own page, which only works
          when served, not opened as a file://).
 
-      2. Expose ONE real endpoint, POST /api/plan, which runs the actual
-         path-planning pipeline (cad_loader -> normal_estimation ->
-         waypoint_generator -> incidence_cone_modifier) on a part's STEP file
-         and returns real waypoint data.
+      2. Expose the real API the GUI drives:
+           POST /api/plan                    path-planning pipeline (real)
+           /api/robot/*                      SR5 connection + live telemetry +
+                                             motion, via robot_bridge (real)
+           /api/parts                        CAD catalogue from config/cad (real)
+           /api/scan/*, /api/scans           scan lifecycle + results store
+                                             (real plumbing; capture/QC still
+                                             stubbed -> honest `incomplete`)
+           /api/rviz/launch                  SR5 in RViz via the Humble container
 
-    Everything else the GUI shows (live scan progress, joint telemetry, QC
-    pass/fail, scan history, RViz/Open3D launch) is still MOCK data baked into
-    the front-end -- those subsystems don't exist in the codebase yet, so there
-    is nothing real to serve for them. As MovementDriver / scanner capture / QC
-    are built, add endpoints here and wire the corresponding GUI handlers.
+    There is NO fabricated data served here: anything a subsystem can't yet
+    produce (e.g. QC metrics) is returned as an explicit empty/`incomplete`
+    state, never invented.
 
     Built on the Python standard library only (http.server) -- no Flask/FastAPI
     -- so it runs with zero pip installs, which also suits an offline shop-floor
-    machine.
+    machine. NOTE: must run under Python 3.8-3.12 for the ROKAE SDK to load
+    (see robot_bridge.py); 3.13+ leaves the arm Offline.
 
 Run:
     python3 backend/server.py               # serves on http://127.0.0.1:8000

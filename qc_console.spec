@@ -10,8 +10,10 @@ Produces a single-file executable `dist/qc-console` that:
   * bundles pywebview for the native window (falls back to the system
     browser at runtime if no GUI backend is present).
 
-Build (from the repo root, inside the venv):
-    .venv/bin/pyinstaller qc_console.spec --noconfirm
+Build (from the repo root, inside the 3.12 venv — the ROKAE SDK only has
+3.8-3.12 builds, so the bundled interpreter must be in that range):
+    .venv312/bin/pyinstaller qc_console.spec --noconfirm
+    # or simply: scripts/build_console.sh
 Run:
     ./dist/qc-console                 # native window (or browser fallback)
     QC_HEADLESS=1 ./dist/qc-console   # server only (no window)
