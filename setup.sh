@@ -4,8 +4,9 @@
 #
 #   git clone https://github.com/CharlieRa0105/QC-scanner.git
 #   cd QC-scanner
-#   ./setup.sh                 # env + deps (enough to run from source)
-#   ./setup.sh --all           # also build the Docker image AND the desktop app
+#   ./setup.sh                 # full setup: env + deps + build the qc-console app
+#   ./setup.sh --all           # also build the qc-humble RViz Docker image
+#   ./setup.sh --no-binary      # env + deps only (run from source, no packaged app)
 #
 # What it does (idempotent — safe to re-run):
 #   1. Ensures `uv` is available (prints the install command if not).
@@ -15,8 +16,8 @@
 #      pyinstaller).
 #   4. Locates the ROKAE xCore SDK (needed for the physical arm) and reports
 #      how to supply it if it's missing.
-#   5. (--with-docker / --all) Builds the qc-humble RViz container.
-#   6. (--with-binary / --all) Builds the single-file dist/qc-console app.
+#   5. Builds the single-file desktop app -> dist/qc-console  (skip: --no-binary).
+#   6. (--with-docker / --all) Builds the qc-humble RViz container (large).
 #
 # Nothing here is committed to git (venv, binary, Docker image, SDK are all
 # gitignored / external) — that's why this script exists.
@@ -28,10 +29,11 @@ cd "$REPO_ROOT"
 
 # ---- options ----------------------------------------------------------------
 WITH_DOCKER=0
-WITH_BINARY=0
+WITH_BINARY=1          # build the desktop app by default — it IS the console
 for arg in "$@"; do
   case "$arg" in
     --with-docker) WITH_DOCKER=1 ;;
+    --no-binary)   WITH_BINARY=0 ;;
     --with-binary) WITH_BINARY=1 ;;
     --all)         WITH_DOCKER=1; WITH_BINARY=1 ;;
     -h|--help)
@@ -50,6 +52,11 @@ die()  { printf '\n\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 PY_VERSION="3.12"
 VENV=".venv312"
 
+# ---- 0. make repo scripts executable ---------------------------------------
+# git may deliver these without the +x bit on a fresh clone; fix it so the
+# documented `scripts/run_console.sh` etc. work directly.
+chmod +x setup.sh scripts/*.sh docker/*.sh 2>/dev/null || true
+
 # ---- 1. uv ------------------------------------------------------------------
 say "Checking for uv (Python toolchain manager)"
 export PATH="$HOME/.local/bin:$PATH"
@@ -67,10 +74,13 @@ ok "Python ${PY_VERSION} available"
 
 # ---- 3. venv + deps ---------------------------------------------------------
 say "Creating ${VENV} and installing Python dependencies"
-if [ -x "${VENV}/bin/python" ]; then
-  ok "${VENV} already exists — reusing (delete it to rebuild from scratch)"
+# Reuse a healthy venv, but rebuild one that's missing or broken. A venv copied
+# or moved between paths has stale absolute shebangs, so verify it actually runs.
+if [ -x "${VENV}/bin/python" ] && "${VENV}/bin/python" -c "pass" >/dev/null 2>&1; then
+  ok "${VENV} already exists and works — reusing"
 else
-  uv venv --python "${PY_VERSION}" "${VENV}"
+  [ -e "${VENV}" ] && warn "${VENV} missing/broken (e.g. moved from another path) — rebuilding"
+  uv venv --clear --python "${PY_VERSION}" "${VENV}"
 fi
 uv pip install --python "${VENV}/bin/python" numpy gmsh pywebview pyinstaller
 ok "${VENV} ready with numpy, gmsh, pywebview, pyinstaller"
@@ -99,10 +109,12 @@ if [ "$WITH_DOCKER" = 1 ]; then
   say "Building the qc-humble RViz container (large — ~5.6 GB, needs network)"
   if ! command -v docker >/dev/null 2>&1; then
     warn "docker not installed — skipping. RViz won't be available."
-  elif [ ! -x docker/build.sh ]; then
+  elif [ ! -f docker/build.sh ]; then
     warn "docker/build.sh missing — skipping."
+  elif bash docker/build.sh; then
+    ok "qc-humble image built"
   else
-    docker/build.sh && ok "qc-humble image built"
+    warn "docker build failed — see output above. RViz won't be available."
   fi
 else
   warn "Skipping Docker image (RViz). Add --with-docker or --all to build it."
@@ -110,11 +122,12 @@ fi
 
 # ---- 6. Desktop binary (optional) ------------------------------------------
 if [ "$WITH_BINARY" = 1 ]; then
-  say "Building the single-file desktop app (dist/qc-console)"
-  scripts/build_console.sh && ok "dist/qc-console built"
+  say "Building the QC console desktop app (dist/qc-console)"
+  bash scripts/build_console.sh || die "build failed — see output above"
+  ok "dist/qc-console built — double-click or run ./dist/qc-console"
 else
-  warn "Skipping the packaged binary. Add --with-binary or --all to build it."
-  warn "(You don't need it — scripts/run_console.sh runs the console from source.)"
+  warn "Skipping the packaged binary (--no-binary). Run from source instead:"
+  warn "  scripts/run_console.sh"
 fi
 
 # ---- done -------------------------------------------------------------------

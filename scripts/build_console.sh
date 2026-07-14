@@ -18,6 +18,9 @@
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
-PY=".venv312/bin/pyinstaller"
-[ -x "$PY" ] || { echo "error: $PY not found — create the 3.12 venv first (see header)"; exit 1; }
-exec "$PY" qc_console.spec --noconfirm
+# Invoke PyInstaller via `python -m` rather than the .venv312/bin/pyinstaller
+# wrapper: the wrapper bakes an absolute shebang that breaks if the repo is
+# moved/renamed, whereas the python symlink stays valid.
+PY=".venv312/bin/python"
+[ -x "$PY" ] || { echo "error: $PY not found — run ./setup.sh first (creates the 3.12 venv)"; exit 1; }
+exec "$PY" -m PyInstaller qc_console.spec --noconfirm

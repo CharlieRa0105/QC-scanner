@@ -25,3 +25,5 @@ ros2_ws/build_local.sh
 _rokae_log_/
 
 logs/
+
+config/
