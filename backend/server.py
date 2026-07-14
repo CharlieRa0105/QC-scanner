@@ -55,14 +55,15 @@ import numpy as np
 # gmsh threading shim
 #
 # gmsh.initialize() installs a SIGINT handler (for Ctrl-C interruptibility)
-# via signal.signal(), which Python only permits on the main thread. When the
-# console runs as a desktop app (app.py), the HTTP server -- and therefore the
-# planning pipeline that calls gmsh -- runs in a background thread, so that
-# call would raise "signal only works in main thread of the main interpreter".
+# via signal.signal(), which Python only permits on the main thread. If the
+# HTTP server -- and therefore the planning pipeline that calls gmsh -- is ever
+# run from a background thread, that call would raise "signal only works in
+# main thread of the main interpreter".
 #
 # We don't need gmsh's Ctrl-C handling here, so make signal.signal a no-op when
 # it's called off the main thread. On the main thread it behaves normally, so
-# the plain `python backend/server.py` CLI path is unaffected.
+# the normal `scripts/run_console.sh` / `python backend/server.py` path is
+# unaffected.
 # ---------------------------------------------------------------------------
 _orig_signal = signal.signal
 
@@ -83,10 +84,8 @@ signal.signal = _safe_signal
 # CLI driver (whose quaternion helper we reuse) in <repo>/scripts/.
 # ---------------------------------------------------------------------------
 # Base dir holding gui/, config/, libs/, scripts/. Normally the repo root
-# (this file's parent's parent). The desktop app (app.py) / a PyInstaller
-# build overrides it via QC_BASE_DIR, because when frozen the data tree is
-# unpacked somewhere else (sys._MEIPASS) and this file's path no longer points
-# at the repo.
+# (this file's parent's parent). Override with QC_BASE_DIR if the data tree
+# ever lives somewhere other than alongside this file.
 REPO_ROOT = Path(os.environ.get("QC_BASE_DIR") or Path(__file__).resolve().parent.parent)
 GUI_DIR = REPO_ROOT / "gui"
 CAD_DIR = REPO_ROOT / "config" / "cad"
@@ -260,24 +259,34 @@ def run_plan(part_id, params):
         window=int(p["window"]),
     )
 
-    # Build the preview waypoint list (position + orientation quaternion),
-    # decimated to MAX_PREVIEW_WAYPOINTS so the payload stays small.
+    # Build two waypoint lists in one pass:
+    #  * `full` — every waypoint (position + orientation quaternion + surface
+    #    target), the complete ScanPath the scan-path visualiser consumes. The
+    #    viewer orients each pose from position->target, so `target` must be
+    #    present or the preview degenerates.
+    #  * `preview` — decimated to MAX_PREVIEW_WAYPOINTS so the console's own
+    #    lightweight readout stays small.
     n = len(waypoints)
     stride = max(1, n // MAX_PREVIEW_WAYPOINTS)
+    standoff = float(p["standoff_mm"])
     preview = []
+    full = []
     max_incidence = 0.0
     for i, (wp, r) in enumerate(zip(waypoints, results)):
         max_incidence = max(max_incidence, float(r["incidence_angle_deg"]))
-        if i % stride != 0:
-            continue
         qx, qy, qz, qw = rotation_matrix_to_quaternion(
             r["x_axis"], r["y_axis"], r["z_axis"]
         )
-        preview.append({
-            "position": [round(float(v), 4) for v in r["position"]],
-            "quaternion": [round(q, 6) for q in (qx, qy, qz, qw)],
-            "lineId": int(wp.line_id),
-        })
+        pos = [round(float(v), 4) for v in r["position"]]
+        quat = [round(q, 6) for q in (qx, qy, qz, qw)]
+        # Surface aim point = the probe's pre-relaxation position pulled back
+        # along the true surface normal by the standoff (same as plan_path.py).
+        target = [round(float(wp.position[k] - wp.normal[k] * standoff), 4)
+                  for k in range(3)]
+        full.append({"position": pos, "quaternion": quat, "target": target})
+        if i % stride == 0:
+            preview.append({"position": pos, "quaternion": quat,
+                            "lineId": int(wp.line_id)})
 
     line_count = 1 + max((wp.line_id for wp in waypoints), default=-1)
 
@@ -299,6 +308,14 @@ def run_plan(part_id, params):
         "params": {k: p[k] for k in DEFAULT_PARAMS},
         "previewWaypoints": preview,
         "previewStride": stride,
+        # Full ScanPath the embedded visualiser loads (positions + quaternions +
+        # surface targets, in mm). Same shape scripts/plan_path.py writes to disk.
+        "scanpath": {
+            "units": "mm",
+            "standoff_mm": round(standoff, 3),
+            "partId": part_id,
+            "waypoints": full,
+        },
     }
 
 

@@ -1219,6 +1219,30 @@ canvas.parentElement.addEventListener('drop', e => {
 });
 
 // ============================================================
+//  Embedded mode — driven by the QC operator console
+//
+//  The console embeds this viewer in an <iframe>. After it runs
+//  /api/plan it posts the generated ScanPath straight in, so
+//  importing a part in the console pulls the part + path up here
+//  automatically (no manual JSON import needed).
+//
+//    parent -> viewer :  { type:'qc:scanpath', scanpath:{...}, name? }
+//    viewer -> parent :  { type:'qc:viewer-ready' }
+//
+//  We announce readiness on load so a path generated *before* this
+//  iframe finished booting still arrives — the parent replays it.
+// ============================================================
+window.addEventListener('message', e => {
+  const m = e.data;
+  if (!m || m.type !== 'qc:scanpath' || !m.scanpath) return;
+  try { loadScanpath(m.scanpath, m.name || 'generated path'); }
+  catch (err) { status('Could not load path from console: ' + (err.message || err), true); }
+});
+if (window.parent && window.parent !== window) {
+  try { window.parent.postMessage({ type: 'qc:viewer-ready' }, '*'); } catch (_) {}
+}
+
+// ============================================================
 //  Small utils
 // ============================================================
 function clearGroup(g){ while(g.children.length){ const c=g.children.pop(); c.traverse?.(o=>{o.geometry?.dispose?.(); o.material?.dispose?.();}); } }

@@ -9,10 +9,6 @@ __pycache__/
 .venv/
 .pytest_cache/
 
-# Desktop-app build artifacts (PyInstaller) — rebuilt from qc_console.spec
-dist/
-build/
-
 # Vendored ROS2 description clone (large; reproduced by scripts/setup_arm_viz.sh)
 ros2_ws/src/rokae_ros2/
 

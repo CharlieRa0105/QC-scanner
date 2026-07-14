@@ -4,51 +4,35 @@ Serves the operator GUI (`gui/`) and exposes the one endpoint that is wired to
 real code today: **`POST /api/plan`**, which runs the actual path-planning
 pipeline on a part's STEP file.
 
-## Run (two ways)
+## Run
 
-**A. Desktop app (double-click)** — a single-file executable that opens a
-native window (falls back to the default browser if no webview backend):
+The console is a **web app** served from source — no build step:
 
 ```bash
-./dist/qc-console                    # native window
-QC_HEADLESS=1 ./dist/qc-console      # server only, no window (for testing)
+scripts/run_console.sh               # http://127.0.0.1:8000 (uses .venv312 + finds the SDK)
+scripts/run_console.sh --port 9000   # different port
+scripts/run_console.sh --host 0.0.0.0  # expose on the LAN (careful)
 ```
+
+Then open <http://127.0.0.1:8000/> in a browser.
 
 > **Python version — read this first.** The ROKAE xCore SDK ships CPython
 > builds for **3.8–3.12 only**. The console must run under one of those or it
 > **cannot connect to the arm** — under 3.13+ the SDK import silently falls
 > through to an empty namespace dir and the arm stays "Offline" (this was the
-> "mock IP still connected" bug: the old build ran on 3.14, failed to load the
+> "mock IP still connected" bug: an old build ran on 3.14, failed to load the
 > SDK, and fell back to a mock). This machine's system `python3` is 3.14, so
-> the repo keeps a pinned **3.12** env at `.venv312`.
-
-Build it (Linux) with PyInstaller — see `qc_console.spec` / `scripts/build_console.sh`.
-Set up the 3.12 env once with `uv` (drops a standalone 3.12, no system changes):
-
-```bash
-uv venv --python 3.12 .venv312
-uv pip install --python .venv312/bin/python numpy gmsh pywebview pyinstaller
-scripts/build_console.sh                          # -> dist/qc-console (bundles 3.12)
-```
-
-The desktop entry point is `app.py` (starts the backend on a free localhost
-port in a daemon thread, then opens the pywebview window). `qc-console.desktop`
-is a file-manager launcher template.
-
-> **Windows .exe:** PyInstaller cannot cross-compile. To get a `.exe`, run the
-> same `qc_console.spec` on a Windows machine.
-
-**B. Served website** — no build step:
-
-```bash
-scripts/run_console.sh               # http://127.0.0.1:8000 (uses .venv312 + finds the SDK)
-```
+> the repo keeps a pinned **3.12** env at `.venv312`. Set it up once with `uv`
+> (drops a standalone 3.12, no system changes):
+>
+> ```bash
+> uv venv --python 3.12 .venv312
+> uv pip install --python .venv312/bin/python numpy gmsh
+> ```
 
 `run_console.sh` runs under `.venv312` and auto-sets `QC_SDK_PATH`, so the arm
 connects. Running `python3 backend/server.py` directly uses the system 3.14 and
 will leave the arm Offline — use the wrapper (or `.venv312/bin/python`).
-
-Then open <http://127.0.0.1:8000/> in a browser.
 
 > The GUI **must** be served over http (not opened as a `file://`) — the
 > dc-runtime front-end self-fetches its own page to parse its template, which

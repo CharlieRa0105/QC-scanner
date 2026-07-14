@@ -123,11 +123,13 @@
       <div style="{{ runRootStyle }}">
 
         <!-- VIEWPORT → embedded scan-path visualiser (gui/scanpath-visualizer).
-             A self-contained three.js viewer: import a ScanPath JSON and preview
-             the toolpath on the Rokae SR5 cell. Served from the same origin by
-             backend/server.py, so this loads directly. -->
+             A self-contained three.js viewer that previews the toolpath on the
+             Rokae SR5 cell. Served from the same origin by backend/server.py.
+             When the operator generates a path (generatePath → /api/plan), the
+             console posts the ScanPath straight into this iframe (see
+             _pushScanpath), so the part + path appear here automatically. -->
         <div style="{{ vpStyle }}">
-          <iframe src="scanpath-visualizer/index.html" title="Scan path visualiser"
+          <iframe id="scanViewer" src="scanpath-visualizer/index.html" title="Scan path visualiser"
                   style="position:absolute;inset:0;width:100%;height:100%;border:0;display:block;background:#0a0e13"></iframe>
         </div>
 
@@ -616,6 +618,11 @@ class Component extends DCLogic {
     // Load the real part catalogue + recorded scans from the backend.
     this._loadParts();
     this._loadScans();
+    // The embedded scan-path viewer announces itself once its scripts boot; when
+    // it does, (re)send the current path so a path generated before the iframe
+    // finished loading — or after a viewer reload — still shows up.
+    this._onViewerMsg=(e)=>{ if(e&&e.data&&e.data.type==='qc:viewer-ready') this._pushScanpath(); };
+    window.addEventListener('message', this._onViewerMsg);
   }
 
   // ---------- real part catalogue (backend /api/parts) ----------
@@ -729,6 +736,7 @@ class Component extends DCLogic {
     clearInterval(this._statusTick);
     clearInterval(this._jointTick);
     clearTimeout(this._ipT);
+    if(this._onViewerMsg) window.removeEventListener('message', this._onViewerMsg);
   }
   componentDidUpdate(){}
 
@@ -775,7 +783,11 @@ class Component extends DCLogic {
       // Real numbers from the planner replace the previous hard-coded 66.
       this.waypointCount = data.waypointCount;
       this._planStats = data;   // {waypointCount, lineCount, bbox, maxIncidenceDeg, spacingMm, ...}
+      // Full ScanPath (positions + targets, mm) for the embedded visualiser.
+      this._lastScanpath = data.scanpath || null;
       this.setState({planning:false, stage:'plan', rviz:'idle'});
+      // Pull the part + path up in the embedded viewer automatically.
+      this._pushScanpath();
     } catch(e){
       const msg = (e && e.message) ? e.message : String(e);
       this.setState({planning:false, planError:msg});
@@ -817,6 +829,20 @@ class Component extends DCLogic {
   };
   viewInAnalytics=()=>this.setState({tab:'analytics',aTab:'dashboard'});
   newPart=()=>{ this.setState({stage:'load',partId:(this.PARTS[0]&&this.PARTS[0].id)||'',matched:null,progress:0,result:null,passNum:1,attempts:0,rviz:'idle',scanRec:null}); };
+
+  // ---------- embedded scan-path visualiser ----------
+  // Push the last generated ScanPath into the embedded viewer iframe. Called
+  // after generatePath, and again whenever the iframe reports it has (re)loaded
+  // ('qc:viewer-ready'), so a path generated before the viewer finished booting
+  // still gets delivered. Same-origin iframe, so postMessage is direct.
+  _pushScanpath=()=>{
+    const sp=this._lastScanpath; if(!sp) return;
+    const ifr=document.getElementById('scanViewer');
+    if(ifr&&ifr.contentWindow){
+      ifr.contentWindow.postMessage(
+        {type:'qc:scanpath', scanpath:sp, name:(this.state.partId||'generated path')}, '*');
+    }
+  };
 
   // ---------- external visualization launchers ----------
   // Real RViz2 launch via the backend (spawns rviz2 in the host ROS2 env).

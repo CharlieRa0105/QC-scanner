@@ -4,20 +4,20 @@
 #
 #   git clone https://github.com/CharlieRa0105/QC-scanner.git
 #   cd QC-scanner
-#   ./setup.sh                 # full setup: env + deps + build the qc-console app
-#   ./setup.sh --all           # also build the qc-humble RViz Docker image
-#   ./setup.sh --no-binary      # env + deps only (run from source, no packaged app)
+#   ./setup.sh                 # env + deps (run the web console from source)
+#   ./setup.sh --with-docker   # also build the qc-humble RViz Docker image
 #
 # What it does (idempotent — safe to re-run):
 #   1. Ensures `uv` is available (prints the install command if not).
 #   2. Installs a standalone CPython 3.12 via uv.  <-- REQUIRED: the ROKAE xCore
 #      SDK only ships 3.8-3.12 builds; the console can't talk to the arm on 3.13+.
-#   3. Creates .venv312 and installs the Python deps (numpy, gmsh, pywebview,
-#      pyinstaller).
+#   3. Creates .venv312 and installs the Python deps (numpy, gmsh).
 #   4. Locates the ROKAE xCore SDK (needed for the physical arm) and reports
 #      how to supply it if it's missing.
-#   5. Builds the single-file desktop app -> dist/qc-console  (skip: --no-binary).
-#   6. (--with-docker / --all) Builds the qc-humble RViz container (large).
+#   5. (--with-docker) Builds the qc-humble RViz container (large).
+#
+# The console is a web app served from source — start it with
+# scripts/run_console.sh (http://127.0.0.1:8000). There is no packaged binary.
 #
 # Nothing here is committed to git (venv, binary, Docker image, SDK are all
 # gitignored / external) — that's why this script exists.
@@ -29,13 +29,9 @@ cd "$REPO_ROOT"
 
 # ---- options ----------------------------------------------------------------
 WITH_DOCKER=0
-WITH_BINARY=1          # build the desktop app by default — it IS the console
 for arg in "$@"; do
   case "$arg" in
-    --with-docker) WITH_DOCKER=1 ;;
-    --no-binary)   WITH_BINARY=0 ;;
-    --with-binary) WITH_BINARY=1 ;;
-    --all)         WITH_DOCKER=1; WITH_BINARY=1 ;;
+    --with-docker|--all) WITH_DOCKER=1 ;;
     -h|--help)
       grep '^#' "$0" | sed 's/^# \{0,1\}//' | head -30
       exit 0 ;;
@@ -82,8 +78,8 @@ else
   [ -e "${VENV}" ] && warn "${VENV} missing/broken (e.g. moved from another path) — rebuilding"
   uv venv --clear --python "${PY_VERSION}" "${VENV}"
 fi
-uv pip install --python "${VENV}/bin/python" numpy gmsh pywebview pyinstaller
-ok "${VENV} ready with numpy, gmsh, pywebview, pyinstaller"
+uv pip install --python "${VENV}/bin/python" numpy gmsh
+ok "${VENV} ready with numpy, gmsh"
 
 # ---- 4. ROKAE SDK -----------------------------------------------------------
 say "Locating the ROKAE xCore SDK (needed to talk to the physical arm)"
@@ -120,27 +116,14 @@ else
   warn "Skipping Docker image (RViz). Add --with-docker or --all to build it."
 fi
 
-# ---- 6. Desktop binary (optional) ------------------------------------------
-if [ "$WITH_BINARY" = 1 ]; then
-  say "Building the QC console desktop app (dist/qc-console)"
-  bash scripts/build_console.sh || die "build failed — see output above"
-  ok "dist/qc-console built — double-click or run ./dist/qc-console"
-else
-  warn "Skipping the packaged binary (--no-binary). Run from source instead:"
-  warn "  scripts/run_console.sh"
-fi
-
 # ---- done -------------------------------------------------------------------
 say "Setup complete."
 cat <<EOF
 
-  Run the console (from source, connects to the arm):
+  Run the console (web app from source, connects to the arm):
       scripts/run_console.sh          →  http://127.0.0.1:8000
 
-  Packaged desktop app (if built with --with-binary/--all):
-      ./dist/qc-console
-
-  RViz arm view (if built with --with-docker/--all):
+  RViz arm view (if built with --with-docker):
       docker/run_arm.sh
 
   Reminder: the arm must be on the network at 192.168.2.160 (or edit the IP in
