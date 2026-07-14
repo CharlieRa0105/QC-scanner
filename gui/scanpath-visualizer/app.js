@@ -1,9 +1,19 @@
-import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { buildRokaeSR5, solveIK, getLinkPoints, LINK_RADII } from './robot.js';
+// Loaded as a classic <script> (NOT an ES module). three.js r128 (UMD) and
+// OrbitControls are loaded first, so `THREE` (and THREE.OrbitControls) are
+// global. robot.js — loaded just before this file — declares buildRokaeSR5,
+// solveIK, getLinkPoints and LINK_RADII as globals, so we reference them
+// directly (re-declaring them here would be a global-scope name clash and would
+// abort this whole script).
+const { OrbitControls } = THREE;
 
 // ============================================================
-//  ScanPath — metrology scan-path planner
+//  ScanPath — metrology scan-path VIEWER
+//
+//  Import a scan-path JSON (positions + orientations + surface targets, mm) and
+//  preview it in 3D: the toolpath, per-waypoint scanner orientation, the surface
+//  target points, and a Rokae SR5 arm on its track playing the path back. This
+//  is a viewer only — it does NOT generate paths (that's scripts/plan_path.py /
+//  the backend planner); it renders a path someone already produced.
 // ============================================================
 
 const $ = (id) => document.getElementById(id);
@@ -106,87 +116,122 @@ function loop(t) {
 requestAnimationFrame(loop);
 
 // ============================================================
-//  STEP loading  (occt-import-js -> WASM OpenCASCADE)
+//  SCAN-PATH JSON IMPORT
+//
+//  Accepts the ScanPath JSON produced by scripts/plan_path.py / the backend
+//  planner / this app's own former export. Each waypoint carries a camera
+//  `position`, a surface `target` (aim point) and a `quaternion`, all in mm in
+//  the part-local CAD frame. We render the path exactly as given.
 // ============================================================
-let occt = null;
-async function ensureOcct() {
-  if (occt) return occt;
-  setLoader(true, 'Initialising CAD kernel…');
-  occt = await occtimportjs();
-  return occt;
-}
-
-async function loadStepFile(file) {
+async function loadScanpathFile(file) {
   try {
-    await ensureOcct();
-    setLoader(true, 'Parsing STEP geometry…');
-    const buf = new Uint8Array(await file.arrayBuffer());
-    const result = occt.ReadStepFile(buf, null);
-    if (!result || !result.success || !result.meshes || !result.meshes.length) {
-      throw new Error('No solid geometry found in file.');
-    }
-    buildModel(result.meshes);
-    $('filechip').textContent = file.name;
-    $('dropHint').style.display = 'none';
-    status(`Loaded "${file.name}" — ${result.meshes.length} solid(s)`);
-    $('planBtn').disabled = false;
-    frameView('iso');
+    setLoader(true, 'Reading scan-path JSON…');
+    const obj = JSON.parse(await file.text());
+    loadScanpath(obj, file.name);
   } catch (e) {
     console.error(e);
     status('Import failed: ' + e.message, true);
-    alert('Could not read STEP file.\n' + e.message);
+    alert('Could not read scan-path JSON.\n' + e.message);
   } finally {
     setLoader(false);
   }
 }
 
-function buildModel(meshes) {
+function loadScanpath(obj, name = 'scanpath.json') {
+  const raw = obj && Array.isArray(obj.waypoints) ? obj.waypoints : null;
+  if (!raw || !raw.length) throw new Error('No "waypoints" array in file.');
+
+  // clear any previous scene content + sim
   clearGroup(state.modelGroup);
   clearGroup(state.pathGroup); clearGroup(state.camGroup); clearGroup(state.rayGroup);
   state.waypoints = [];
   resetReport();
-  $('exportBtn').disabled = true;
   $('transport').classList.remove('show');
   setPlaying(false);
   if (state.sim.rig) { if (state.sim.rig.parent) state.sim.rig.parent.remove(state.sim.rig); disposeObj(state.sim.rig); state.sim.rig = null; state.sim.curve = null; }
   if (state.sim.robot) { scene.remove(state.sim.robot.root); disposeObj(state.sim.robot.root); state.sim.robot = null; }
   if (state.sim.gantry) { scene.remove(state.sim.gantry); disposeObj(state.sim.gantry); state.sim.gantry = null; }
 
-  const mat = new THREE.MeshStandardMaterial({
-    color: 0x8fa3b3, metalness: 0.55, roughness: 0.45,
-    flatShading: false, side: THREE.DoubleSide,
-  });
-  const edgeMat = new THREE.LineBasicMaterial({ color: 0x3d4a58, transparent:true, opacity:0.6 });
+  const v3 = (a) => new THREE.Vector3(+a[0], +a[1], +a[2]);
+  const parsed = raw.map((w) => ({
+    pos: v3(w.position),
+    surf: v3(w.target || w.position),   // aim point; fall back to the position
+  }));
 
-  const merged = new THREE.Group();
-  for (const m of meshes) {
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.Float32BufferAttribute(m.attributes.position.array, 3));
-    if (m.attributes.normal) g.setAttribute('normal', new THREE.Float32BufferAttribute(m.attributes.normal.array, 3));
-    else g.computeVertexNormals();
-    if (m.index) g.setIndex(new THREE.Uint32BufferAttribute(m.index.array, 1));
-    const mesh = new THREE.Mesh(g, mat);
-    merged.add(mesh);
-    const edges = new THREE.LineSegments(new THREE.EdgesGeometry(g, 25), edgeMat);
-    mesh.add(edges);
+  // Seat the path on the table. The file frame is part-local CAD mm, Y-up (the
+  // real pipeline's scanpath_convert.py later remaps Y-up→Z-up for the arm; here
+  // the scene is Y-up so we keep it). We centre the scanned surface (the target
+  // points) over the table centre and rest its lowest point on y=0, applying the
+  // SAME rigid translation to the camera positions so relative geometry — and
+  // therefore the standoff — is preserved exactly. Orientation is untouched.
+  const surfBox = new THREE.Box3();
+  parsed.forEach((p) => surfBox.expandByPoint(p.surf));
+  const c = surfBox.getCenter(new THREE.Vector3());
+  const offset = new THREE.Vector3(-c.x, -surfBox.min.y, -c.z);
+  parsed.forEach((p) => { p.pos.add(offset); p.surf.add(offset); });
+
+  // Oriented waypoints. Orientation looks from the camera toward its target —
+  // the same convention the moving scanner and the camera icons use — which is
+  // robust to whatever quaternion sign convention the generator wrote.
+  const wps = parsed.map((p) => ({
+    pos: p.pos.clone(),
+    surf: p.surf.clone(),
+    quat: quatLookAt(p.pos, p.surf),
+    normal: p.pos.clone().sub(p.surf).normalize(),
+  }));
+  state.waypoints = wps;
+
+  // Standoff (mm): from the file, else the median camera→target distance.
+  let standoff = Number(obj.standoff_mm);
+  if (!isFinite(standoff) || standoff <= 0) {
+    const ds = wps.map((w) => w.pos.distanceTo(w.surf)).sort((a, b) => a - b);
+    standoff = ds[Math.floor(ds.length / 2)] || 250;
   }
-  state.modelGroup.add(merged);
-  state.modelMesh = merged;
+  state.standoff = standoff;
 
-  // remember the part's own local bounds (before any table transform)
-  merged.updateMatrixWorld(true);
-  state.rawBox = new THREE.Box3().setFromObject(merged);
-  // reset transform for a freshly loaded part, seeded with the AUTO-ORIENTATION
-  // (best scanning pose). Scale is untouched — only rotation + placement change.
-  state.partXform = {
-    rotQuat: computeAutoOrientation(state.rawBox),
-    centered: true, manual: false, manualX: 0, manualZ: 0,
-  };
+  // A lightweight wireframe "part" proxy around the scanned surface, so the arm
+  // mount-height + framing logic have a part to reason about. It is NOT a Mesh,
+  // so it adds no collision geometry — we don't have the real CAD here, so the
+  // arm reaches each pose freely (honest: no fake collision checking).
+  buildPartProxy(surfBox.clone().translate(offset));
 
   buildTable();
-  placePartOnTable();
+  drawPath(wps);
+  drawCameras(wps);
+  drawTargets(wps);
   applyLayers();
-  status(`Loaded — auto-oriented for scanning. Drag the part to reposition.`);
+  report(wps);
+  buildSim(wps);
+
+  $('filechip').textContent = `${name} · ${wps.length} wp`;
+  $('dropHint').style.display = 'none';
+  status(`Loaded "${name}" — ${wps.length} waypoints · standoff ${(standoff / 10).toFixed(0)} cm`);
+  frameView('iso');
+}
+
+// A wireframe box around the scanned surface bounds — a stand-in for the real
+// part (which we don't import). Sets state.modelMesh / bbox for the arm+table
+// code. LineSegments only → no isMesh children → no collision surfaces.
+function buildPartProxy(box) {
+  clearGroup(state.modelGroup);
+  const size = box.getSize(new THREE.Vector3());
+  const centre = box.getCenter(new THREE.Vector3());
+  const s = new THREE.Vector3(Math.max(size.x, 1), Math.max(size.y, 1), Math.max(size.z, 1));
+  const geo = new THREE.BoxGeometry(s.x, s.y, s.z);
+  const edges = new THREE.LineSegments(
+    new THREE.EdgesGeometry(geo),
+    new THREE.LineBasicMaterial({ color: 0x8fa3b3, transparent: true, opacity: 0.5 })
+  );
+  edges.position.copy(centre);
+  const group = new THREE.Group();
+  group.add(edges);
+  group.add(makeTextSprite('part (bounds)', new THREE.Vector3(centre.x, box.max.y + 40, centre.z), 0x8fb0c8));
+  geo.dispose();
+
+  state.modelGroup.add(group);
+  state.modelMesh = group;
+  state.rawBox = box.clone();
+  state.bbox = box.clone();
 }
 
 // ============================================================
@@ -300,278 +345,34 @@ function makeTextSprite(text, pos, color=0xffffff) {
 }
 
 // ============================================================
-//  Auto-orientation — choose the best axis-aligned pose for scanning.
-//  For a rail-mounted arm that sweeps along X and reaches from the −Z side, the
-//  ideal placement puts the part's LONGEST dimension along X (so the slider does
-//  the long travel), its SHORTEST along Y (lie flat — lowest, easiest to reach),
-//  and the middle along Z (shallow depth). This only permutes/flips axes, so the
-//  part's SCALE is never changed. Returns a quaternion to apply to the part.
+//  Draw: surface target points + camera→target sight lines
+//  The targets are the actual surface samples the scan aims at; the faint lines
+//  show each camera's line of sight to its target (the standoff direction).
 // ============================================================
-function computeAutoOrientation(rawBox) {
-  const s = rawBox.getSize(new THREE.Vector3());
-  const dims = [s.x, s.y, s.z];
-  const order = [0, 1, 2].sort((a, b) => dims[b] - dims[a]); // [longest, mid, shortest]
-  const longest = order[0], mid = order[1], shortest = order[2];
-
-  // Build a rotation whose columns send the part's longest local axis → world X,
-  // shortest → world Y, mid → world Z. (makeBasis columns = images of e_x,e_y,e_z.)
-  const cols = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
-  cols[longest].set(1, 0, 0);   // longest local axis → +X
-  cols[shortest].set(0, 1, 0);  // shortest local axis → +Y
-  cols[mid].set(0, 0, 1);       // middle local axis → +Z
-  const m = new THREE.Matrix4().makeBasis(cols[0], cols[1], cols[2]);
-  // guarantee a proper rotation (det +1); flip Z column if it came out reflected
-  if (m.determinant() < 0) { cols[2].negate(); m.makeBasis(cols[0], cols[1], cols[2]); }
-  return new THREE.Quaternion().setFromRotationMatrix(m);
-}
-
-// ============================================================
-//  Apply the part transform (rotation quaternion + placement) and seat it on
-//  the table so its lowest point rests exactly on y = 0.
-// ============================================================
-function placePartOnTable() {
-  const merged = state.modelMesh;
-  if (!merged) return;
-  const xf = state.partXform;
-
-  // reset, then apply the cumulative rotation (auto-orient + any 90° steps)
-  merged.position.set(0,0,0);
-  merged.quaternion.copy(xf.rotQuat);
-  merged.updateMatrixWorld(true);
-
-  // seat on table: shift so min-Y sits on y=0
-  let box = new THREE.Box3().setFromObject(merged);
-  const c = box.getCenter(new THREE.Vector3());
-  const size = box.getSize(new THREE.Vector3());
-  merged.position.y -= box.min.y;        // bottom on the table surface
-
-  // Position the part within the PARTS AREA (never on the slider strip).
-  merged.position.x -= c.x;              // centred in X to start
-  if (xf.manual) {
-    // explicit user-dragged position (parts-area coords)
-    merged.position.x += xf.manualX;
-    merged.position.z += (xf.manualZ - c.z);
-  } else if (xf.centered) {
-    // centre of the parts area (X = 0, Z = parts-area centre)
-    merged.position.z += (PARTS.zCenter - c.z);
-  } else {
-    // seat toward the far (+Z) edge of the parts area
-    const targetZ = PARTS.zMax - size.z*0.5 - 100;
-    merged.position.z += (targetZ - c.z);
-  }
-  merged.updateMatrixWorld(true);
-
-  // clamp fully inside the parts area (off the slider strip, on the table)
-  const nb = new THREE.Box3().setFromObject(merged);
-  if (nb.min.x < PARTS.xMin) merged.position.x += (PARTS.xMin - nb.min.x);
-  if (nb.max.x > PARTS.xMax) merged.position.x -= (nb.max.x - PARTS.xMax);
-  if (nb.min.z < PARTS.zMin) merged.position.z += (PARTS.zMin - nb.min.z);
-  if (nb.max.z > PARTS.zMax) merged.position.z -= (nb.max.z - PARTS.zMax);
-  merged.updateMatrixWorld(true);
-
-  state.bbox = new THREE.Box3().setFromObject(merged);
-}
-
-// ============================================================
-//  PATH PLANNER
-//  Strategy: sample the part surface, cluster sample points into
-//  a set of viewpoints on scan "rings" at increasing height, offset
-//  each viewpoint along the local surface normal by the standoff
-//  distance, orient the scanner to face the surface, then order the
-//  viewpoints into a continuous serpentine path around the object.
-// ============================================================
-function planPath() {
-  if (!state.modelMesh) return;
-  setLoader(true, 'Planning path & checking arm clearance…');
-  // let the loader paint
-  setTimeout(() => {
-    try { doPlan(); }
-    catch (e) { console.error(e); status('Planning failed: '+e.message, true); }
-    finally { setLoader(false); }
-  }, 30);
-}
-
-// ============================================================
-//  SURFACE-GRID SCAN PATH PLANNER — helpers
-//
-//  Algorithm: multi-face surface rastering. Each reachable face of the part
-//  (TOP, the NEAR −Z side, and BOTH ±X ends) is swept with a regular grid of
-//  rays at a fixed surface spacing. Every hit becomes a viewpoint offset along
-//  the hit's true LOCAL normal by the standoff, then filtered for reachability,
-//  line-of-sight (occlusion) and spatial duplicates, and finally ordered as a
-//  rail-aware boustrophedon along X.
-//
-//  Why this over the previous approaches: the normal-cluster planner emitted one
-//  viewpoint per normal direction (under-covering large faces), and the earlier
-//  single-axis "arc" raster aimed every ray at one column-centre point, so it
-//  really only saw the TOP and a sliver of the near side and never reached the
-//  ends of a long part. Rastering each reachable face independently gives even,
-//  complete coverage of the sides and the full length of the part, while the
-//  per-hit local-normal offset keeps the 20–30 cm standoff correct on curved and
-//  angled faces.
-// ============================================================
-
-// Cast one ray (from `origin`, travelling along `dir` INTO the part) and return
-// the first surface hit as an oriented, standoff-offset viewpoint (or null if the
-// hit is unreachable for a rail-mounted arm). The outward surface normal and the
-// standoff camera position are derived from the hit's true local normal, so the
-// standoff is correct on curved and angled faces.
-function castViewpoint(origin, dir, meshes, raycaster, standoff, minCamY) {
-  raycaster.set(origin, dir);
-  raycaster.far = 3e5;
-  const hits = raycaster.intersectObjects(meshes, true);
-  if (!hits.length) return null;
-
-  const surfPt = hits[0].point.clone();
-  let normal = hits[0].face
-    ? hits[0].face.normal.clone().transformDirection(hits[0].object.matrixWorld).normalize()
-    : dir.clone().negate();
-  if (normal.dot(dir) > 0) normal.negate();            // force outward-facing
-
-  // ---- reachability filter (rail-mounted arm, approaches from the −Z side) ----
-  if (normal.z > 0.60 && normal.y < 0.25) return null; // far (+Z) face — unreachable
-  if (normal.y < -0.55) return null;                    // underside / bottom cap
-
-  const camPos = surfPt.clone().addScaledVector(normal, standoff);
-  // keep the scanner above the table — clamp low viewpoints up rather than
-  // rejecting them (rejecting killed all side coverage on short parts).
-  if (camPos.y < minCamY) camPos.y = minCamY;
-  return { surf: surfPt, normal, camPos };
-}
-
-// Line-of-sight test: the scanner at camPos must actually SEE surfPt without a
-// nearer piece of geometry blocking it. Cast from camPos toward surfPt; the first
-// hit should land at ~standoff (the intended surface). A much closer hit means
-// something occludes the view (or camPos is buried) → reject.
-function viewpointHasLineOfSight(camPos, surfPt, meshes, raycaster) {
-  const toSurf = surfPt.clone().sub(camPos);
-  const dist = toSurf.length();
-  if (dist < 1e-3) return false;
-  raycaster.set(camPos, toSurf.divideScalar(dist));
-  raycaster.far = dist * 1.5;
-  const hits = raycaster.intersectObjects(meshes, true);
-  if (!hits.length) return false;                       // nothing there to scan
-  return hits[0].distance > dist * 0.6;                 // first hit is the target
-}
-
-// ============================================================
-//  Main planner
-// ============================================================
-function doPlan() {
-  clearGroup(state.pathGroup); clearGroup(state.camGroup); clearGroup(state.rayGroup);
-  state.waypoints = [];
-
-  const box = state.bbox.clone();
-  const size = box.getSize(new THREE.Vector3());
-  const centre = box.getCenter(new THREE.Vector3());
-  const standoff = state.standoff;
-  const density = state.density;
-
-  const meshes = [];
-  state.modelMesh.traverse(o => { if (o.isMesh) meshes.push(o); });
-  if (!meshes.length) { status('No geometry found.', true); return; }
-
-  const raycaster = new THREE.Raycaster();
-  // minimum scanner height above the table — a clamp, not a reject.
-  const minCamY = Math.max(size.y * 0.03, 25);
-
-  // ---- grid spacing — scales with the PART SIZE (not the standoff) ----
-  // Spacing is a fraction of the part's largest dimension, so a small part gets
-  // a fine grid and a large part a coarse one — always enough samples per face.
-  // (Tying this to the standoff broke small parts: when the part was smaller than
-  // the standoff, every face got a 1×1 grid and the de-dup merged all hits into a
-  // single viewpoint.) Higher density → finer spacing.
-  const spacing = size3(box) / (6 + density * 4);       // ~1/10 … 1/22 of the part
-  const pad = size3(box) * 0.5 + standoff;              // launch rays from outside
-  const inset = Math.min(size.x, size.y, size.z) * 0.02 + 0.5;
-  const nAxis = (lo, hi) => THREE.MathUtils.clamp(Math.round((hi - lo) / spacing) + 1, 2, 80);
-
-  // The reachable faces for a rail-mounted arm approaching from −Z:
-  //   • TOP        (+Y) — rays travel −Y, rastered over X × Z
-  //   • NEAR SIDE  (−Z) — rays travel +Z, rastered over X × Y  (the vertical side
-  //                        facing the rail — this is what was being missed)
-  //   • BOTH ENDS  (±X) — rays travel ∓X, rastered over Z × Y  (the ends of a
-  //                        long part — the slider reaches them by moving in X)
-  const xLo = box.min.x + inset, xHi = box.max.x - inset;
-  const yLo = box.min.y + inset, yHi = box.max.y - inset;
-  const zLo = box.min.z + inset, zHi = box.max.z - inset;
-
-  const rasters = [
-    { dir:new THREE.Vector3(0,-1,0), // TOP
-      uLo:xLo, uHi:xHi, vLo:zLo, vHi:zHi,
-      pt:(u,v)=>new THREE.Vector3(u, box.max.y + pad, v) },
-    { dir:new THREE.Vector3(0,0,1),  // NEAR SIDE (−Z)
-      uLo:xLo, uHi:xHi, vLo:yLo, vHi:yHi,
-      pt:(u,v)=>new THREE.Vector3(u, v, box.min.z - pad) },
-    { dir:new THREE.Vector3(-1,0,0), // +X END
-      uLo:zLo, uHi:zHi, vLo:yLo, vHi:yHi,
-      pt:(u,v)=>new THREE.Vector3(box.max.x + pad, v, u) },
-    { dir:new THREE.Vector3(1,0,0),  // −X END
-      uLo:zLo, uHi:zHi, vLo:yLo, vHi:yHi,
-      pt:(u,v)=>new THREE.Vector3(box.min.x - pad, v, u) },
-  ];
-
-  // ---- raster every reachable face, collect line-of-sight-valid viewpoints ----
-  const cell = spacing * 0.7;                    // global de-dupe cell size
-  const seen = new Set();
-  const keyOf = (p) => `${Math.round(p.x/cell)},${Math.round(p.y/cell)},${Math.round(p.z/cell)}`;
-  const vps = [];
-  for (const r of rasters) {
-    const nU = nAxis(r.uLo, r.uHi), nV = nAxis(r.vLo, r.vHi);
-    for (let iu = 0; iu < nU; iu++) {
-      const u = nU === 1 ? (r.uLo+r.uHi)/2 : THREE.MathUtils.lerp(r.uLo, r.uHi, iu/(nU-1));
-      for (let iv = 0; iv < nV; iv++) {
-        const v = nV === 1 ? (r.vLo+r.vHi)/2 : THREE.MathUtils.lerp(r.vLo, r.vHi, iv/(nV-1));
-        const vp = castViewpoint(r.pt(u,v), r.dir, meshes, raycaster, standoff, minCamY);
-        if (!vp) continue;
-        if (!viewpointHasLineOfSight(vp.camPos, vp.surf, meshes, raycaster)) continue;
-        const key = keyOf(vp.surf);
-        if (seen.has(key)) continue;              // another face already covered this patch
-        seen.add(key);
-        vps.push(vp);
-      }
-    }
-  }
-
-  if (!vps.length) { status('No reachable surface found — try a different placement or density.', true); return; }
-
-  // ---- rail-aware boustrophedon ordering ----
-  // Bucket viewpoints into X columns (the slider travel direction) so the slider
-  // advances monotonically left→right; within each column sweep bottom→top and
-  // alternate the direction each column so the arm's Y-Z motion continues from
-  // where the previous column ended — no long returns.
-  const nCols = Math.max(4, nAxis(box.min.x, box.max.x));
-  const xMin = box.min.x - pad, xRange = Math.max((box.max.x + pad) - xMin, 1);
-  const buckets = Array.from({ length: nCols }, () => []);
-  for (const vp of vps) {
-    const ci = THREE.MathUtils.clamp(Math.floor((vp.camPos.x - xMin) / xRange * nCols), 0, nCols - 1);
-    buckets[ci].push(vp);
-  }
-  const ordered = [];
-  buckets.forEach((col, i) => {
-    if (!col.length) return;
-    // sweep up the column; near-side (further from rail, −Z) first at each height
-    col.sort((a, b) => (a.camPos.y - b.camPos.y) || (a.camPos.z - b.camPos.z));
-    ordered.push(...(i % 2 === 0 ? col : col.reverse()));
+function drawTargets(wps) {
+  const tgtMat = new THREE.MeshBasicMaterial({ color: 0x7d6cff });
+  const tGeo = new THREE.SphereGeometry(DOT_R * 0.75, 6, 6);
+  const rayMat = new THREE.LineBasicMaterial({ color: 0x4a5aa0, transparent: true, opacity: 0.3 });
+  const stride = wps.length > 200 ? Math.ceil(wps.length / 200) : 1;
+  const seg = [];
+  wps.forEach((w, i) => {
+    if (i % stride !== 0 && i !== wps.length - 1) return;
+    const d = new THREE.Mesh(tGeo, tgtMat);
+    d.position.copy(w.surf);
+    state.rayGroup.add(d);
+    seg.push(w.pos.clone(), w.surf.clone());
   });
+  if (seg.length) {
+    state.rayGroup.add(new THREE.LineSegments(
+      new THREE.BufferGeometry().setFromPoints(seg), rayMat));
+  }
+}
 
-  // ---- build oriented waypoints (scanner −Z looks at the surface point) ----
-  const wps = ordered.map(p => ({
-    pos: p.camPos.clone(),
-    quat: quatLookAt(p.camPos, p.surf),
-    surf: p.surf.clone(),
-    normal: p.normal.clone(),
-  }));
-
-  state.waypoints = wps;
-  drawPath(wps);
-  drawCameras(wps);
-  applyLayers();
-  report(wps, size);
-  buildSim(wps);
-  $('exportBtn').disabled = false;
-  // don't reframe on replan — keep the user's current view (FIT button resets it)
-  status(`Path generated — ${wps.length} waypoints (multi-face raster)`);
+// Rebuild the scanner rig + arm from the current waypoints. Used when a display
+// option that affects the arm (true-scale / X-slider / mount height) changes —
+// there is nothing to re-plan, we just rebuild the sim from the loaded path.
+function rebuildArm() {
+  if (state.waypoints.length >= 2) buildSim(state.waypoints);
 }
 
 // Orientation whose -Z axis points from `eye` toward `target`, +Y ~ world up.
@@ -690,7 +491,7 @@ function drawCameras(wps) {
 // ============================================================
 //  Report
 // ============================================================
-function report(wps, size) {
+function report(wps) {
   let len = 0;
   for (let i=1;i<wps.length;i++) len += wps[i].pos.distanceTo(wps[i-1].pos);
   // standoff deviation
@@ -707,34 +508,6 @@ function report(wps, size) {
   $('stDev').innerHTML = sigma.toFixed(1) + '<small> mm</small>';
 }
 function resetReport(){ ['stWp','stLen','stCov','stDev'].forEach(id=>$(id).textContent='—'); }
-
-// ============================================================
-//  Export
-// ============================================================
-function exportPath() {
-  if (!state.waypoints.length) return;
-  const payload = {
-    generator: 'ScanPath',
-    units: 'mm',
-    frame: 'machine (Y-up, model centred at origin)',
-    standoff_mm: state.standoff,
-    density: state.density,
-    generated: new Date().toISOString(),
-    waypoints: state.waypoints.map((w,i) => ({
-      i,
-      position: [round(w.pos.x), round(w.pos.y), round(w.pos.z)],
-      quaternion: [round(w.quat.x,5), round(w.quat.y,5), round(w.quat.z,5), round(w.quat.w,5)],
-      target: [round(w.surf.x), round(w.surf.y), round(w.surf.z)],
-    })),
-  };
-  const blob = new Blob([JSON.stringify(payload,null,2)], {type:'application/json'});
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = 'scanpath.json';
-  a.click();
-  URL.revokeObjectURL(a.href);
-  status('Exported scanpath.json');
-}
 
 // ============================================================
 //  SIMULATION  — animate a scanner rig traveling the path
@@ -1358,22 +1131,14 @@ function applyLayers() {
 //  UI wiring
 // ============================================================
 $('importBtn').onclick = () => $('fileInput').click();
-$('fileInput').onchange = e => { if (e.target.files[0]) loadStepFile(e.target.files[0]); };
-$('planBtn').onclick = planPath;
-$('exportBtn').onclick = exportPath;
+$('fileInput').onchange = e => { if (e.target.files[0]) loadScanpathFile(e.target.files[0]); };
 
-$('standoff').oninput = e => { state.standoff = parseFloat(e.target.value)*10; $('standoffVal').textContent = e.target.value+' cm'; };
-$('density').oninput = e => {
-  state.density = parseInt(e.target.value);
-  $('densityVal').textContent = ['','low','medium','high','ultra'][state.density];
-};
-
+// ---- path smoothing (display only — smooth curve vs. straight segments) ----
 document.querySelectorAll('[data-smooth]').forEach(el => el.onclick = () => {
   document.querySelectorAll('[data-smooth]').forEach(x=>x.classList.remove('on'));
   el.classList.add('on');
   state.smooth = el.dataset.smooth === '1';
-  $('smoothVal').textContent = state.smooth ? 'on':'off';
-  if (state.waypoints.length) doPlan();
+  if (state.waypoints.length) { clearGroup(state.pathGroup); drawPath(state.waypoints); applyLayers(); }
 });
 
 document.querySelectorAll('[data-layer]').forEach(el => el.onclick = () => {
@@ -1392,48 +1157,16 @@ document.querySelectorAll('[data-robot]').forEach(el => el.onclick = () => {
   }
 });
 
-// ---- placement controls (rotate X/Y/Z · centre) ----
-// NOTE: placement changes never reframe the camera — the view is only reset by
-// the FIT / preset view buttons (top-right). This keeps your current viewpoint
-// while you rotate, centre, or drag the part.
-function applyPlacement() {
-  if (!state.modelMesh) return;
-  placePartOnTable();
-  // if a path was already generated, regenerate against the new placement
-  if (state.waypoints.length) planPath();
-}
-
-// rotate the part 90° about a WORLD axis (pre-multiply so it's applied in world
-// space, on top of the current orientation) — works for X, Y and Z.
-function rotatePart(axis) {
-  if (!state.modelMesh) return;
-  const q = new THREE.Quaternion().setFromAxisAngle(axis, Math.PI / 2);
-  state.partXform.rotQuat.premultiply(q);
-  state.partXform.manual = false;   // re-seat within the parts area after a turn
-  applyPlacement();
-}
-$('rotXBtn').onclick = () => rotatePart(new THREE.Vector3(1,0,0));
-$('rotYBtn').onclick = () => rotatePart(new THREE.Vector3(0,1,0));
-$('rotZBtn').onclick = () => rotatePart(new THREE.Vector3(0,0,1));
-
-$('placeCenter').onclick = () => {
-  if (!state.modelMesh) return;
-  state.partXform.centered = !state.partXform.centered;
-  state.partXform.manual = false;   // preset placement overrides manual drag
-  $('placeCenter').classList.toggle('on', state.partXform.centered);
-  applyPlacement();
-};
-
 $('trueScaleTgl').onclick = () => {
   state.sim.trueScale = !state.sim.trueScale;
   $('trueScaleTgl').classList.toggle('on', state.sim.trueScale);
-  if (state.waypoints.length) planPath();   // rebuild arm at new scale
+  rebuildArm();   // rebuild arm at new scale
 };
 
 $('sliderTgl').onclick = () => {
   state.sim.useSlider = !state.sim.useSlider;
   $('sliderTgl').classList.toggle('on', state.sim.useSlider);
-  if (state.waypoints.length) planPath();   // rebuild arm mount + trajectory
+  rebuildArm();   // rebuild arm mount + trajectory
 };
 
 // Mount height: update the label live while dragging; rebuild the arm on release
@@ -1442,64 +1175,7 @@ $('mountHeight').oninput = e => {
   state.sim.mountCm = parseInt(e.target.value);
   $('mountHeightVal').textContent = e.target.value + ' cm';
 };
-$('mountHeight').onchange = () => { if (state.waypoints.length) planPath(); };
-
-// ---- always-on part drag (grab the part body, slide in X-Z) ----
-// Uses only core three.js raycasting. A pointerdown that hits the part starts a
-// drag (and suspends orbit for that gesture); a pointerdown on empty space is
-// left to OrbitControls, so there is NO mode button and no on-model gizmo.
-const partDrag = {
-  active:false, ray:new THREE.Raycaster(),
-  plane:new THREE.Plane(new THREE.Vector3(0,1,0), 0), grab:new THREE.Vector3(),
-};
-function ndcFromEvent(e) {
-  const r = canvas.getBoundingClientRect();
-  return new THREE.Vector2(((e.clientX-r.left)/r.width)*2-1, -((e.clientY-r.top)/r.height)*2+1);
-}
-function planeHit(e) {
-  partDrag.ray.setFromCamera(ndcFromEvent(e), camera);
-  const p = new THREE.Vector3();
-  return partDrag.ray.ray.intersectPlane(partDrag.plane, p) ? p : null;
-}
-canvas.addEventListener('pointerdown', e => {
-  if (!state.modelMesh || e.button !== 0 || state.sim.pov) return;
-  partDrag.ray.setFromCamera(ndcFromEvent(e), camera);
-  // does the click land on the part?
-  const targets = [];
-  state.modelMesh.traverse(o => { if (o.isMesh) targets.push(o); });
-  if (!partDrag.ray.intersectObjects(targets, true).length) return;  // empty space → orbit
-
-  const hit = planeHit(e); if (!hit) return;
-  const c = new THREE.Box3().setFromObject(state.modelMesh).getCenter(new THREE.Vector3());
-  partDrag.grab.set(hit.x - c.x, 0, hit.z - c.z);
-  partDrag.active = true;
-  controls.enabled = false;                    // suspend orbit during the drag
-  canvas.setPointerCapture(e.pointerId);
-  status('Moving part — release to replan');
-});
-canvas.addEventListener('pointermove', e => {
-  if (!partDrag.active) return;
-  const hit = planeHit(e); if (!hit) return;
-  const box = new THREE.Box3().setFromObject(state.modelMesh);
-  const c = box.getCenter(new THREE.Vector3());
-  const half = box.getSize(new THREE.Vector3()).multiplyScalar(0.5);
-  const cx = THREE.MathUtils.clamp(hit.x - partDrag.grab.x, PARTS.xMin + half.x, PARTS.xMax - half.x);
-  const cz = THREE.MathUtils.clamp(hit.z - partDrag.grab.z, PARTS.zMin + half.z, PARTS.zMax - half.z);
-  state.partXform.manual = true;
-  state.partXform.manualX = cx;
-  state.partXform.manualZ = cz;
-  state.partXform.centered = false;
-  $('placeCenter').classList.remove('on');
-  placePartOnTable();                          // cheap reposition; no replan mid-drag
-});
-canvas.addEventListener('pointerup', e => {
-  if (!partDrag.active) return;
-  partDrag.active = false;
-  controls.enabled = true;
-  canvas.releasePointerCapture?.(e.pointerId);
-  if (state.waypoints.length) planPath();      // replan against the new position
-  status('Ready');
-});
+$('mountHeight').onchange = () => rebuildArm();
 
 document.querySelectorAll('[data-view]').forEach(el => el.onclick = () => frameView(el.dataset.view));
 $('fitBtn').onclick = () => frameView('iso');
@@ -1538,8 +1214,8 @@ const dropHint = $('dropHint');
 ['dragleave','drop'].forEach(ev => canvas.parentElement.addEventListener(ev, e=>{e.preventDefault(); dropHint.classList.remove('drag'); if(state.modelMesh)dropHint.style.display='none';}));
 canvas.parentElement.addEventListener('drop', e => {
   const f = e.dataTransfer.files[0];
-  if (f && /\.(step|stp)$/i.test(f.name)) loadStepFile(f);
-  else status('Drop a .step / .stp file', true);
+  if (f && /\.json$/i.test(f.name)) loadScanpathFile(f);
+  else status('Drop a scan-path .json file', true);
 });
 
 // ============================================================

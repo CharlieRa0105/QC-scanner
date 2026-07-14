@@ -1,9 +1,12 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+<!-- Surface any uncaught script error to the footer status line (the viewer is
+     a single-page tool with no console on the shop floor). -->
+<script>window.addEventListener('error',function(e){var s=document.getElementById('statusText');if(s){s.textContent='Error: '+(e.message||'script error');s.style.color='#e8a33d';}});</script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ScanPath — Metrology Path Planner</title>
+<title>ScanPath — Path Viewer</title>
 <style>
   :root {
     --bg: #0d1117;
@@ -234,71 +237,49 @@
 <header>
   <div class="logo">
     <span class="mark"></span>
-    ScanPath <small>· metrology path planner</small>
+    ScanPath <small>· path viewer</small>
   </div>
   <div class="spacer"></div>
-  <div class="filechip" id="filechip">no model loaded</div>
+  <div class="filechip" id="filechip">no path loaded</div>
 </header>
 
 <aside>
   <div class="group">
-    <h2>Model</h2>
+    <h2>Scan path</h2>
     <button class="btn" id="importBtn">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>
-      Import STEP file
+      Import scan path (JSON)
     </button>
-    <input type="file" id="fileInput" accept=".step,.stp,.STEP,.STP" style="display:none">
-    <p class="hint">Accepts .step / .stp (ISO 10303 B-rep). Parsed in-browser via the OpenCASCADE kernel.</p>
-  </div>
-
-  <div class="group">
-    <h2>Placement on table</h2>
-    <div class="field">
-      <label>Rotate 90° <span class="val">X · Y · Z</span></label>
-      <div class="toggle-row">
-        <div class="toggle" id="rotXBtn">Rotate X</div>
-        <div class="toggle" id="rotYBtn">Rotate Y</div>
-        <div class="toggle" id="rotZBtn">Rotate Z</div>
-      </div>
-    </div>
-    <div class="toggle-row" style="margin-top:10px">
-      <div class="toggle on" id="placeCenter">Centre</div>
-    </div>
-    <p class="hint">Parts auto-orient for scanning on import (scale unchanged). Click and drag the part itself to slide it across the table — it stays within the 1.5 m × 3 m parts area. Use Rotate X/Y/Z for 90° turns about each axis.</p>
-  </div>
-
-  <div class="group">
-    <h2>Scan Parameters</h2>
-    <div class="field">
-      <label>Standoff distance <span class="val" id="standoffVal">25 cm</span></label>
-      <input type="range" id="standoff" min="20" max="30" step="0.5" value="25">
-    </div>
-    <div class="field">
-      <label>Coverage density <span class="val" id="densityVal">medium</span></label>
-      <input type="range" id="density" min="1" max="4" step="1" value="2">
-    </div>
-    <div class="field">
-      <label>Path smoothing <span class="val" id="smoothVal">on</span></label>
-      <div class="toggle-row">
-        <div class="toggle on" data-smooth="1">Smooth</div>
-        <div class="toggle" data-smooth="0">Raw</div>
-      </div>
-    </div>
-    <button class="btn primary" id="planBtn" disabled style="margin-top:14px">Generate scan path</button>
+    <input type="file" id="fileInput" accept=".json,application/json" style="display:none">
+    <p class="hint">Loads a ScanPath JSON (positions + orientations + surface targets, in mm) from <span style="color:var(--ink-dim)">plan_path.py</span> / the backend planner. This is a viewer — it previews an existing path, it does not generate one.</p>
   </div>
 
   <div class="group">
     <h2>Display</h2>
     <div class="toggle-row">
-      <div class="toggle on" data-layer="model">Model</div>
       <div class="toggle on" data-layer="path">Path</div>
       <div class="toggle on" data-layer="cams">Cameras</div>
     </div>
     <div class="toggle-row">
-      <div class="toggle" data-layer="grid">Grid</div>
+      <div class="toggle on" data-layer="rays">Targets</div>
+      <div class="toggle on" data-layer="model">Part bounds</div>
     </div>
     <div class="toggle-row">
-      <div class="toggle on" data-robot="1">Rokae SR5 arm</div>
+      <div class="toggle" data-layer="grid">Grid</div>
+    </div>
+    <div class="field" style="margin-top:12px">
+      <label>Path smoothing</label>
+      <div class="toggle-row">
+        <div class="toggle on" data-smooth="1">Smooth</div>
+        <div class="toggle" data-smooth="0">Raw</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="group">
+    <h2>Rokae SR5 cell</h2>
+    <div class="toggle-row">
+      <div class="toggle on" data-robot="1">Show arm</div>
     </div>
     <div class="toggle-row">
       <div class="toggle on" id="trueScaleTgl">True scale (1:1)</div>
@@ -310,7 +291,7 @@
       <label>Mount height <span class="val" id="mountHeightVal">auto</span></label>
       <input type="range" id="mountHeight" min="30" max="200" step="5" value="90">
     </div>
-    <p class="hint">Arm hangs from an overhead mount at the table centre. With X-slider on it rides a gantry along X; off, the base is fixed and the arm reaches X with its own joints. Drag Mount height to raise/lower the mount.</p>
+    <p class="hint">The arm plays the imported path back: it hangs from an overhead mount at the table centre and its scanner tracks each waypoint. With X-slider on it rides a gantry along X; off, the base is fixed. Poses out of reach are shown held/dimmed. No collision checking (the real CAD isn't loaded here).</p>
   </div>
 
   <div class="group">
@@ -318,14 +299,10 @@
     <div class="stat-grid">
       <div class="stat"><div class="k">Waypoints</div><div class="v" id="stWp">—</div></div>
       <div class="stat"><div class="k">Path length</div><div class="v" id="stLen">—</div></div>
-      <div class="stat"><div class="k">Coverage</div><div class="v" id="stCov">—</div></div>
+      <div class="stat"><div class="k">Standoff band</div><div class="v" id="stCov">—</div></div>
       <div class="stat"><div class="k">Standoff σ</div><div class="v" id="stDev">—</div></div>
     </div>
-    <button class="btn" id="exportBtn" disabled style="margin-top:12px">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
-      Export path (JSON)
-    </button>
-    <p class="hint">Export contains ordered [x,y,z] positions in mm and [quaternion] scanner orientations, machine-frame.</p>
+    <p class="hint">Path length is the summed distance between waypoints. Standoff band is the share of waypoints whose camera→target distance is within 10 mm of the nominal standoff; σ is its spread.</p>
   </div>
 </aside>
 
@@ -341,8 +318,8 @@
   </div>
   <div class="drop-hint" id="dropHint">
     <svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M12 3v12m0 0l-4-4m4 4l4-4"/><path d="M4 15v4a2 2 0 002 2h12a2 2 0 002-2v-4"/></svg>
-    <div class="big">Import or drop a STEP file to begin</div>
-    <div>The planner will inspect the geometry and lay out a scanner trajectory</div>
+    <div class="big">Import or drop a scan-path JSON to begin</div>
+    <div>The viewer will lay out the toolpath and play it back on the Rokae SR5 cell</div>
   </div>
   <div class="loader" id="loader"><div class="spin"></div><span id="loaderText">Loading…</span></div>
 
@@ -384,23 +361,37 @@
 </main>
 
 <footer>
-  <span><span class="dot">●</span> <span id="statusText">Ready — awaiting model</span></span>
+  <span><span class="dot">●</span> <span id="statusText">Ready — awaiting scan path</span></span>
   <div class="spacer"></div>
   <span>LMB orbit · RMB pan · scroll zoom</span>
   <span id="fpsText">—</span>
 </footer>
 
-<script type="importmap">
-{
-  "imports": {
-    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+<!-- Vendored three.js r128 (UMD) + OrbitControls + STLLoader, then robot.js and
+     app.js — all classic scripts (no ES modules / no CDN) so the console runs
+     fully offline. Loaded in order and cache-busted so edits always take effect
+     (python http.server otherwise serves a stale file). -->
+<script>
+(function () {
+  const V = '?v=' + Date.now();
+  function load(src) {
+    return new Promise((res, rej) => {
+      const s = document.createElement('script');
+      s.src = src + V; s.onload = res;
+      s.onerror = () => rej(new Error('failed to load ' + src));
+      document.head.appendChild(s);
+    });
   }
-}
+  load('../vendor/three.min.js')
+    .then(() => Promise.all([load('../vendor/OrbitControls.js'), load('../vendor/STLLoader.js')]))
+    .then(() => load('./robot.js'))
+    .then(() => load('./app.js'))
+    .catch((e) => {
+      console.error(e);
+      const el = document.getElementById('statusText');
+      if (el) { el.textContent = '3D libraries failed to load — ' + e.message; el.style.color = '#e8a33d'; }
+    });
+})();
 </script>
-<script src="https://cdn.jsdelivr.net/npm/occt-import-js@0.0.23/dist/occt-import-js.js"></script>
-<!-- cache-bust the module each load so edits always take effect (python http.server
-     otherwise serves a stale cached module) -->
-<script type="module">import('./app.js?v=' + Date.now());</script>
 </body>
 </html>

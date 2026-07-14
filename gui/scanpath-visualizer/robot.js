@@ -1,5 +1,7 @@
-import * as THREE from 'three';
-import { STLLoader } from 'three/addons/loaders/STLLoader.js';
+// Loaded as a classic <script> (NOT an ES module): three.js r128 (UMD) and its
+// STLLoader are loaded before this file, so `THREE` is a global and the loader
+// is `THREE.STLLoader`. This file's public API is exposed on `window.SR5` at the
+// bottom for app.js to consume — see index.html's loader order.
 
 // ============================================================
 //  Rokae xMate SR5 — built from the user's exact URDF (xMateSR5_urdf.xacro)
@@ -51,7 +53,7 @@ function linkMaterial() {
 //  URDF origins) is created synchronously so IK works immediately; the STL
 //  visual meshes load asynchronously and attach to each link group.
 // ============================================================
-export function buildRokaeSR5() {
+function buildRokaeSR5() {
   // zUp holds the robot in ROS Z-up coords; root rotates it into Y-up.
   const root = new THREE.Group();
   root.name = 'RokaeSR5';
@@ -116,7 +118,7 @@ export function buildRokaeSR5() {
 
 // asynchronously load the STL meshes and attach to each link group
 function loadMeshes(chain) {
-  const loader = new STLLoader();
+  const loader = new THREE.STLLoader();
   let pending = MESH_FILES.length;
   MESH_FILES.forEach((file, i) => {
     loader.load(file, (geo) => {
@@ -134,7 +136,7 @@ function loadMeshes(chain) {
 
 // Ordered world-space points along the arm (base -> each joint -> TCP).
 // app.js uses consecutive pairs as link segments for collision testing.
-export function getLinkPoints(chain) {
+function getLinkPoints(chain) {
   chain.root.updateWorldMatrix(true, true);
   const pts = [];
   pts.push(chain.linkGroups[0].getWorldPosition(new THREE.Vector3()));
@@ -144,7 +146,7 @@ export function getLinkPoints(chain) {
 }
 
 // collision radius (mm) around each link segment — from the real mesh girths
-export const LINK_RADII = [90, 75, 70, 60, 55, 50, 42];
+const LINK_RADII = [90, 75, 70, 60, 55, 50, 42];
 
 // ============================================================
 //  CCD Inverse Kinematics
@@ -152,7 +154,7 @@ export const LINK_RADII = [90, 75, 70, 60, 55, 50, 42];
 //  TCP onto the target position, then bias the final joints to also
 //  match the target orientation (scanner facing the surface).
 // ============================================================
-export function solveIK(chain, targetPos, aimPoint, iterations = 12) {
+function solveIK(chain, targetPos, aimPoint, iterations = 12) {
   const { joints, tcp } = chain;
   const tmp = new THREE.Vector3();
   const tipPos = new THREE.Vector3();
@@ -275,3 +277,6 @@ function clampJoint(j) {
   const c = THREE.MathUtils.clamp(a, j.min, j.max);
   if (c !== a) j.group.quaternion.setFromAxisAngle(j.axis, c);
 }
+
+// ---- public API (classic-script global for app.js) ----
+window.SR5 = { buildRokaeSR5, solveIK, getLinkPoints, LINK_RADII };

@@ -122,98 +122,13 @@
     <sc-if value="{{ isRun }}" hint-placeholder-val="{{ true }}">
       <div style="{{ runRootStyle }}">
 
-        <!-- VIEWPORT → external visualization launcher -->
+        <!-- VIEWPORT → embedded scan-path visualiser (gui/scanpath-visualizer).
+             A self-contained three.js viewer: import a ScanPath JSON and preview
+             the toolpath on the Rokae SR5 cell. Served from the same origin by
+             backend/server.py, so this loads directly. -->
         <div style="{{ vpStyle }}">
-          <div style="position:absolute;inset:0;overflow:auto;padding:22px;display:flex;flex-direction:column;gap:16px;background:var(--color-gray-50)">
-
-            <!-- header -->
-            <div style="display:flex;align-items:center;gap:10px">
-              <span style="width:8px;height:8px;border-radius:50%;background:{{ vpModeDot }}"></span>
-              <span style="font-weight:700;font-size:15px">Cell visualization</span>
-              <span style="font-family:var(--font-mono);font-size:11px;color:var(--color-charcoal-500)">ROKAE SR5 · 3 m track</span>
-              <span style="margin-left:auto;font-size:11px;font-weight:700;letter-spacing:.04em;color:var(--color-charcoal-500)">{{ vpModeLabel }}</span>
-            </div>
-
-            <!-- RViz launcher card -->
-            <div style="border:1px solid var(--color-charcoal-100);background:#fff;flex:none">
-              <div style="display:flex;align-items:center;gap:12px;padding:14px 18px;border-bottom:1px solid var(--color-charcoal-100)">
-                <div style="width:38px;height:38px;border-radius:8px;background:var(--color-charcoal-900);display:flex;align-items:center;justify-content:center;flex:none">
-                  <svg width="20" height="20" fill="none" stroke="var(--color-lime-500)" stroke-width="2"><use href="assets/icons.svg#atom"/></svg>
-                </div>
-                <div style="min-width:0">
-                  <div style="font-weight:700;font-size:15px">RViz2</div>
-                  <div style="font-size:11px;color:var(--color-charcoal-500);font-family:var(--font-mono)">arm · rail · scan path — native window on host</div>
-                </div>
-                <span style="margin-left:auto;display:inline-flex;align-items:center;gap:6px;background:{{ rvizStatusBg }};color:{{ rvizStatusFg }};padding:3px 10px;border-radius:4px;font-size:12px;font-weight:700"><span style="width:6px;height:6px;border-radius:50%;background:{{ rvizStatusFg }}"></span>{{ rvizStatusLabel }}</span>
-              </div>
-
-              <!-- not yet planned -->
-              <sc-if value="{{ rvizDisabledState }}" hint-placeholder-val="{{ true }}">
-                <div style="padding:34px 22px;display:flex;flex-direction:column;align-items:center;gap:14px;text-align:center">
-                  <div style="width:56px;height:56px;border-radius:10px;border:1.5px dashed var(--color-charcoal-200);display:flex;align-items:center;justify-content:center">
-                    <svg width="26" height="26" fill="none" stroke="var(--color-charcoal-400)" stroke-width="2"><use href="assets/icons.svg#scan"/></svg>
-                  </div>
-                  <div style="max-width:340px;font-size:13px;color:var(--color-charcoal-600)">Generate a scan path to open the arm, rail and toolpath in RViz2.</div>
-                  <button disabled="disabled" style="height:44px;padding:0 20px;border:1px solid var(--color-charcoal-200);border-radius:6px;background:#fff;color:#000;font-weight:700;font-size:14px;font-family:var(--font-sans);opacity:.4;cursor:default;display:inline-flex;align-items:center;gap:8px"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><use href="assets/icons.svg#atom"/></svg>Open in RViz</button>
-                </div>
-              </sc-if>
-
-              <!-- ready to open -->
-              <sc-if value="{{ rvizReadyState }}" hint-placeholder-val="{{ false }}">
-                <div style="padding:26px 22px;display:flex;flex-direction:column;align-items:center;gap:14px;text-align:center">
-                  <div style="width:56px;height:56px;border-radius:10px;background:var(--color-blue-50);display:flex;align-items:center;justify-content:center">
-                    <svg width="26" height="26" fill="none" stroke="var(--color-blue-500)" stroke-width="2"><use href="assets/icons.svg#atom"/></svg>
-                  </div>
-                  <div style="max-width:360px;font-size:13px;color:var(--color-charcoal-600)">Launch RViz2 on the host to view the SR5 arm and move it with the joint sliders. Opens in the Humble container.</div>
-                  <button onClick="{{ openRviz }}" style="height:46px;padding:0 22px;border:0;border-radius:6px;background:#000;color:#fff;font-weight:700;font-size:14px;font-family:var(--font-sans);cursor:pointer;display:inline-flex;align-items:center;gap:8px"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><use href="assets/icons.svg#atom"/></svg>Open in RViz</button>
-                </div>
-              </sc-if>
-
-              <!-- opening -->
-              <sc-if value="{{ rvizOpening }}" hint-placeholder-val="{{ false }}">
-                <div style="padding:40px 22px;display:flex;flex-direction:column;align-items:center;gap:16px;text-align:center">
-                  <div style="width:34px;height:34px;border:3px solid var(--color-charcoal-100);border-top-color:var(--color-blue-500);border-radius:50%;animation:qcspin .8s linear infinite"></div>
-                  <div style="font-size:14px;font-weight:700">Opening RViz2…</div>
-                  <div style="font-size:12px;color:var(--color-charcoal-500);font-family:var(--font-mono)">launching subprocess on host · ros2 run rviz2</div>
-                </div>
-              </sc-if>
-
-              <!-- open (window representation) -->
-              <sc-if value="{{ rvizOpen }}" hint-placeholder-val="{{ false }}">
-                <div style="padding:16px">
-                  <div style="border:1px solid var(--color-charcoal-200);border-radius:6px;overflow:hidden">
-                    <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--color-charcoal-900)">
-                      <span style="width:9px;height:9px;border-radius:50%;background:#DA1E28"></span>
-                      <span style="width:9px;height:9px;border-radius:50%;background:#f59e0b"></span>
-                      <span style="width:9px;height:9px;border-radius:50%;background:#45ae4a"></span>
-                      <span style="margin-left:6px;font-family:var(--font-mono);font-size:11px;color:rgba(255,255,255,.75)">RViz2 — scan_cell.rviz</span>
-                      <span style="margin-left:auto;font-size:10px;font-family:var(--font-mono);color:rgba(255,255,255,.4)">host · display :0</span>
-                    </div>
-                    <div style="background:#101727;padding:26px 18px;display:flex;flex-direction:column;align-items:center;gap:12px;text-align:center">
-                      <svg width="40" height="40" fill="none" stroke="var(--color-lime-500)" stroke-width="1.6"><use href="assets/icons.svg#atom"/></svg>
-                      <div style="color:#fff;font-size:13px;font-weight:600">Native RViz2 window running on the operator PC</div>
-                      <div style="color:rgba(255,255,255,.55);font-size:11.5px;font-family:var(--font-mono);max-width:360px;line-height:1.5">SR5 arm · 3 m linear rail · {{ rvizLiveLine }}</div>
-                      <div style="display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--color-lime-500);font-family:var(--font-mono);margin-top:2px"><span style="width:6px;height:6px;border-radius:50%;background:var(--color-lime-500);animation:qcpulse 1.4s infinite"></span>rviz2 node active · PID 4821</div>
-                    </div>
-                  </div>
-                  <div style="display:flex;gap:8px;margin-top:12px">
-                    <button onClick="{{ openRviz }}" style="flex:1;height:40px;border:1px solid var(--color-charcoal-200);border-radius:6px;background:#fff;color:#000;font-weight:600;font-size:13px;font-family:var(--font-sans);cursor:pointer">Bring to front</button>
-                    <button onClick="{{ closeRviz }}" style="flex:none;height:40px;padding:0 16px;border:1px solid var(--color-charcoal-200);border-radius:6px;background:#fff;color:var(--color-charcoal-600);font-weight:600;font-size:13px;font-family:var(--font-sans);cursor:pointer">Close window</button>
-                  </div>
-                </div>
-              </sc-if>
-            </div>
-
-            <!-- path summary -->
-            <sc-if value="{{ pathGenerated }}" hint-placeholder-val="{{ false }}">
-              <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;flex:none">
-                <div style="border:1px solid var(--color-charcoal-100);background:#fff;padding:14px"><div style="font-size:11px;color:var(--color-charcoal-500)">Waypoints</div><div style="font-family:var(--font-mono);font-size:20px;font-weight:700;margin-top:2px">{{ waypointCount }}</div><div style="font-size:10px;color:var(--color-charcoal-500)">per pass</div></div>
-                <div style="border:1px solid var(--color-charcoal-100);background:#fff;padding:14px"><div style="font-size:11px;color:var(--color-charcoal-500)">Est. cycle</div><div style="font-family:var(--font-mono);font-size:20px;font-weight:700;margin-top:2px">{{ estTime }}</div><div style="font-size:10px;color:var(--color-charcoal-500)">both passes</div></div>
-                <div style="border:1px solid var(--color-charcoal-100);background:#fff;padding:14px"><div style="font-size:11px;color:var(--color-charcoal-500)">Passes</div><div style="font-family:var(--font-mono);font-size:20px;font-weight:700;margin-top:2px">2</div><div style="font-size:10px;color:var(--color-charcoal-500)">two separate scans</div></div>
-                <div style="border:1px solid var(--color-charcoal-100);background:#fff;padding:14px"><div style="font-size:11px;color:var(--color-charcoal-500)">Standoff</div><div style="font-family:var(--font-mono);font-size:20px;font-weight:700;margin-top:2px">140<span style="font-size:11px"> mm</span></div><div style="font-size:10px;color:var(--color-charcoal-500)">scanner offset</div></div>
-              </div>
-            </sc-if>
-          </div>
+          <iframe src="scanpath-visualizer/index.html" title="Scan path visualiser"
+                  style="position:absolute;inset:0;width:100%;height:100%;border:0;display:block;background:#0a0e13"></iframe>
         </div>
 
         <!-- FLOW PANEL -->
