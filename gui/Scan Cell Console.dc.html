@@ -8,17 +8,11 @@
      VENDORED DEPENDENCIES (offline / no CDN)
      These MUST load before support.js. The dc-runtime's loadReactUmd()
      short-circuits when window.React/window.ReactDOM already exist, so
-     pre-loading them here means it never reaches out to unpkg. THREE r128
-     is the UMD build that attaches OrbitControls/STLLoader onto the global
-     `THREE` object, which is exactly what this app's scene code expects
-     (window.THREE, THREE.OrbitControls, THREE.STLLoader). Load order
-     matters: three core first, then its addons, then React.
-     Originally these came from unpkg CDN; vendored 2026-07-13 so the
-     shop-floor console runs without internet.
+     pre-loading them here means it never reaches out to unpkg.
+     Vendored 2026-07-13 so the shop-floor console runs without internet.
+     (The 3D cell view was retired in favour of the real RViz launcher, so
+     three.js / OrbitControls / STLLoader are no longer loaded.)
      ============================================================ -->
-<script src="./vendor/three.min.js"></script>
-<script src="./vendor/OrbitControls.js"></script>
-<script src="./vendor/STLLoader.js"></script>
 <script src="./vendor/react.production.min.js"></script>
 <script src="./vendor/react-dom.production.min.js"></script>
 
@@ -336,11 +330,11 @@
                   <div style="border:1px solid var(--color-charcoal-100);background:#fff;padding:12px"><div style="font-size:11px;color:var(--color-charcoal-500)">Passes</div><div style="font-family:var(--font-mono);font-size:18px;font-weight:700;margin-top:2px">2</div><div style="font-size:10px;color:var(--color-charcoal-500)">two separate scans</div></div>
                   <div style="border:1px solid var(--color-charcoal-100);background:#fff;padding:12px"><div style="font-size:11px;color:var(--color-charcoal-500)">Waypoints</div><div style="font-family:var(--font-mono);font-size:18px;font-weight:700;margin-top:2px">{{ waypointCount }}</div><div style="font-size:10px;color:var(--color-charcoal-500)">per pass</div></div>
                   <div style="border:1px solid var(--color-charcoal-100);background:#fff;padding:12px"><div style="font-size:11px;color:var(--color-charcoal-500)">Est. scan time</div><div style="font-family:var(--font-mono);font-size:18px;font-weight:700;margin-top:2px">{{ estTime }}</div><div style="font-size:10px;color:var(--color-charcoal-500)">both passes</div></div>
-                  <div style="border:1px solid var(--color-charcoal-100);background:#fff;padding:12px"><div style="font-size:11px;color:var(--color-charcoal-500)">Standoff</div><div style="font-family:var(--font-mono);font-size:18px;font-weight:700;margin-top:2px">140<span style="font-size:11px"> mm</span></div><div style="font-size:10px;color:var(--color-charcoal-500)">scanner offset</div></div>
+                  <div style="border:1px solid var(--color-charcoal-100);background:#fff;padding:12px"><div style="font-size:11px;color:var(--color-charcoal-500)">Standoff</div><div style="font-family:var(--font-mono);font-size:18px;font-weight:700;margin-top:2px">{{ standoffMm }}<span style="font-size:11px"> mm</span></div><div style="font-size:10px;color:var(--color-charcoal-500)">scanner offset</div></div>
                 </div>
-                <div style="display:flex;align-items:center;gap:10px;padding:12px 14px;background:var(--color-green-50);border:1px solid var(--color-green-200)">
-                  <svg width="18" height="18" fill="none" stroke="var(--color-green-900)" stroke-width="2"><use href="assets/icons.svg#check-circle"/></svg>
-                  <span style="font-size:13px;font-weight:600;color:var(--color-green-900)">No collisions — full surface reachable</span>
+                <div style="display:flex;align-items:center;gap:10px;padding:12px 14px;background:var(--color-charcoal-50);border:1px solid var(--color-charcoal-200)">
+                  <svg width="18" height="18" fill="none" stroke="var(--color-charcoal-600)" stroke-width="2"><use href="assets/icons.svg#alert-triangle"/></svg>
+                  <span style="font-size:13px;font-weight:600;color:var(--color-charcoal-700)">Collision &amp; reachability checking runs in RViz/MoveIt — not verified in this console</span>
                 </div>
                 <div style="display:flex;gap:10px">
                   <button onClick="{{ backToId }}" style="{{ secondaryBtn }}">Back</button>
@@ -428,270 +422,52 @@
     <!-- ============ ANALYTICS TAB ============ -->
     <sc-if value="{{ isAnalytics }}" hint-placeholder-val="{{ false }}">
       <div id="analytics-root" style="height:100%;overflow:auto;padding:24px">
-        <div style="max-width:1200px;margin:0 auto">
-          <!-- header + subtabs -->
-          <div style="display:flex;align-items:flex-end;gap:16px;margin-bottom:22px;flex-wrap:wrap">
-            <div>
-              <h1 class="ds" style="font-size:26px">QC analytics</h1>
-              <p class="ds" style="font-size:13px;color:var(--color-charcoal-600);margin-top:4px">Surface deviation from CAD · TEASER++ global alignment + ICP refine · signed-distance heatmap</p>
-            </div>
-            <div style="flex:1"></div>
-            <sc-if value="{{ hasScans }}" hint-placeholder-val="{{ false }}">
-              <div style="display:flex;gap:8px">
-                <button onClick="{{ setADash }}" style="{{ dashPill }}">Fleet dashboard</button>
-                <button onClick="{{ setADetail }}" style="{{ detailPill }}">Scan detail</button>
-                <button onClick="{{ setAHistory }}" style="{{ historyPill }}">Part history</button>
-              </div>
-            </sc-if>
+        <div style="max-width:1100px;margin:0 auto">
+          <div style="margin-bottom:18px">
+            <h1 class="ds" style="font-size:26px">QC analytics</h1>
+            <p class="ds" style="font-size:13px;color:var(--color-charcoal-600);margin-top:4px">Scans recorded to the results store. Deviation and coverage metrics populate once scanner capture and the QC quality gate are implemented.</p>
           </div>
 
-          <!-- EMPTY STATE — no scans have been recorded yet -->
+          <!-- pipeline-status banner (honest about what isn't built) -->
+          <div style="display:flex;align-items:flex-start;gap:12px;padding:14px 16px;background:var(--color-amber-50);border:1px solid var(--color-amber-200);border-radius:8px;margin-bottom:18px">
+            <svg width="18" height="18" fill="none" stroke="var(--color-amber-900)" stroke-width="2" style="flex:none;margin-top:1px"><use href="assets/icons.svg#alert-triangle"/></svg>
+            <div style="font-size:13px;color:var(--color-amber-900);line-height:1.5">
+              <span style="font-weight:700">QC metrics not yet computed.</span>
+              Scanner capture, point-cloud registration and the pass/fail quality gate are not implemented, so scans are logged but carry no deviation, coverage or pass/fail data.
+            </div>
+          </div>
+
+          <!-- EMPTY STATE -->
           <sc-if value="{{ noScans }}" hint-placeholder-val="{{ true }}">
             <div style="border:1px dashed var(--color-charcoal-200);border-radius:10px;background:#fff;padding:56px 24px;display:flex;flex-direction:column;align-items:center;text-align:center;gap:14px">
               <div style="width:60px;height:60px;border-radius:50%;background:var(--color-charcoal-50);display:flex;align-items:center;justify-content:center">
                 <svg width="28" height="28" fill="none" stroke="var(--color-charcoal-400)" stroke-width="2"><use href="assets/icons.svg#bar-chart"/></svg>
               </div>
               <div>
-                <h2 class="ds" style="font-size:22px">No scan data yet</h2>
-                <p class="ds" style="color:var(--color-charcoal-600);margin-top:8px;font-size:14px;max-width:460px">
-                  Analytics populate once parts have been scanned and evaluated. The QC pipeline
-                  (scanner capture → point-cloud registration → CAD comparison → pass/fail) isn't
-                  wired up yet, so there are no results to chart.
-                </p>
+                <h2 class="ds" style="font-size:22px">No scans recorded yet</h2>
+                <p class="ds" style="color:var(--color-charcoal-600);margin-top:8px;font-size:14px;max-width:460px">Run a scan from the Run tab and it will appear here.</p>
               </div>
             </div>
           </sc-if>
 
-          <!-- ===== DASHBOARD ===== -->
-          <sc-if value="{{ aDash }}" hint-placeholder-val="{{ true }}">
-            <div style="display:flex;flex-direction:column;gap:16px">
-              <!-- KPIs -->
-              <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px">
-                <div style="border:1px solid var(--color-charcoal-100);background:#fff;padding:16px">
-                  <div style="font-size:12px;color:var(--color-charcoal-500);font-weight:600">First-pass quality rate</div>
-                  <div style="font-family:var(--font-mono);font-size:30px;font-weight:700;margin-top:6px">{{ kpiFirstPass }}<span style="font-size:15px">%</span></div>
-                  <div style="font-size:11px;color:var(--color-green-900);margin-top:4px;display:flex;align-items:center;gap:4px"><svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><use href="assets/icons.svg#arrow-up"/></svg>2.1 pts vs last week</div>
-                </div>
-                <div style="border:1px solid var(--color-charcoal-100);background:#fff;padding:16px">
-                  <div style="font-size:12px;color:var(--color-charcoal-500);font-weight:600">Rescan rate</div>
-                  <div style="font-family:var(--font-mono);font-size:30px;font-weight:700;margin-top:6px">{{ kpiRescan }}<span style="font-size:15px">%</span></div>
-                  <div style="font-size:11px;color:var(--color-charcoal-500);margin-top:4px">1+ rescan before pass</div>
-                </div>
-                <div style="border:1px solid var(--color-charcoal-100);background:#fff;padding:16px">
-                  <div style="font-size:12px;color:var(--color-charcoal-500);font-weight:600">Flagged for review</div>
-                  <div style="font-family:var(--font-mono);font-size:30px;font-weight:700;margin-top:6px;color:#A10000">{{ kpiFlagged }}</div>
-                  <div style="font-size:11px;color:var(--color-charcoal-500);margin-top:4px">in review queue</div>
-                </div>
-                <div style="border:1px solid var(--color-charcoal-100);background:#fff;padding:16px">
-                  <div style="font-size:12px;color:var(--color-charcoal-500);font-weight:600">Avg scanner coverage</div>
-                  <div style="font-family:var(--font-mono);font-size:30px;font-weight:700;margin-top:6px">{{ kpiCoverage }}<span style="font-size:15px">%</span></div>
-                  <div style="font-size:11px;color:var(--color-charcoal-500);margin-top:4px">surface completeness</div>
-                </div>
+          <!-- RECORDED SCANS (real, from /api/scans) -->
+          <sc-if value="{{ hasScans }}" hint-placeholder-val="{{ false }}">
+            <div style="border:1px solid var(--color-charcoal-100);background:#fff">
+              <div style="padding:14px 18px;border-bottom:1px solid var(--color-charcoal-100);font-weight:700;font-size:15px;display:flex;align-items:center;gap:8px">Recorded scans<span style="font-family:var(--font-mono);font-size:12px;color:var(--color-charcoal-500);font-weight:400">{{ scanCount }} total</span></div>
+              <div style="display:grid;grid-template-columns:170px 1fr 160px 110px 96px;gap:0;padding:10px 18px;font-size:11px;font-weight:700;color:var(--color-charcoal-500);border-bottom:1px solid var(--color-charcoal-100);letter-spacing:.02em">
+                <span>SCAN ID</span><span>PART</span><span>STARTED</span><span style="text-align:right">WAYPOINTS</span><span style="text-align:right">STATUS</span>
               </div>
-
-              <!-- charts row -->
-              <div style="display:grid;grid-template-columns:1.4fr 1fr;gap:14px">
-                <div style="border:1px solid var(--color-charcoal-100);background:#fff;padding:18px">
-                  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
-                    <div style="font-weight:700;font-size:15px">QC outcomes over time</div>
-                    <div style="display:flex;gap:14px;font-size:11px;color:var(--color-charcoal-600)">
-                      <span style="display:flex;align-items:center;gap:5px"><span style="width:9px;height:9px;background:#45ae4a;border-radius:2px"></span>Pass</span>
-                      <span style="display:flex;align-items:center;gap:5px"><span style="width:9px;height:9px;background:#f59e0b;border-radius:2px"></span>Rescan</span>
-                      <span style="display:flex;align-items:center;gap:5px"><span style="width:9px;height:9px;background:#da1e28;border-radius:2px"></span>Flagged</span>
-                    </div>
-                  </div>
-                  <svg viewBox="0 0 524 150" style="width:100%;height:170px">
-                    <line x1="12" y1="136" x2="516" y2="136" stroke="var(--color-charcoal-200)" stroke-width="1"/>
-                    <sc-for list="{{ trendRects }}" as="r" hint-placeholder-count="24">
-                      <rect x="{{ r.x }}" y="{{ r.y }}" width="{{ r.w }}" height="{{ r.h }}" fill="{{ r.fill }}" rx="1"></rect>
-                    </sc-for>
-                  </svg>
-                  <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--color-charcoal-500);font-family:var(--font-mono);margin-top:4px"><span>30 Jun</span><span>13 Jul</span></div>
+              <sc-for list="{{ scansRows }}" as="r" hint-placeholder-count="6">
+                <div style="display:grid;grid-template-columns:170px 1fr 160px 110px 96px;gap:0;padding:12px 18px;align-items:center;border-bottom:1px solid var(--color-charcoal-100)">
+                  <span style="font-family:var(--font-mono);font-size:12px;font-weight:600">{{ r.scanId }}</span>
+                  <span style="font-size:13px;color:var(--color-charcoal-700)">{{ r.part }}</span>
+                  <span style="font-family:var(--font-mono);font-size:11px;color:var(--color-charcoal-500)">{{ r.started }}</span>
+                  <span style="font-family:var(--font-mono);font-size:13px;text-align:right">{{ r.waypoints }}</span>
+                  <span style="display:flex;justify-content:flex-end"><span style="display:inline-flex;align-items:center;gap:5px;background:{{ r.badgeBg }};color:{{ r.badgeFg }};padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700"><span style="width:5px;height:5px;border-radius:50%;background:{{ r.badgeFg }}"></span>{{ r.status }}</span></span>
                 </div>
-                <div style="border:1px solid var(--color-charcoal-100);background:#fff;padding:18px">
-                  <div style="font-weight:700;font-size:15px;margin-bottom:4px">Why scans failed</div>
-                  <div style="font-size:11px;color:var(--color-charcoal-500);margin-bottom:16px">Failure stage · last 30 days</div>
-                  <div style="display:flex;flex-direction:column;gap:16px">
-                    <sc-for list="{{ failBars }}" as="b" hint-placeholder-count="4">
-                      <div>
-                        <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:5px"><span style="color:var(--color-charcoal-700)">{{ b.label }}</span><span style="font-family:var(--font-mono);font-weight:700">{{ b.count }}</span></div>
-                        <div style="height:8px;background:var(--color-charcoal-100);border-radius:4px;overflow:hidden"><div style="height:100%;width:{{ b.w }}px;background:{{ b.color }}"></div></div>
-                      </div>
-                    </sc-for>
-                  </div>
-                </div>
-              </div>
-
-              <!-- recent scans table -->
-              <div style="border:1px solid var(--color-charcoal-100);background:#fff">
-                <div style="padding:14px 18px;border-bottom:1px solid var(--color-charcoal-100);font-weight:700;font-size:15px">Recent scans</div>
-                <div style="display:grid;grid-template-columns:120px 1fr 130px 90px 90px 96px;gap:0;padding:10px 18px;font-size:11px;font-weight:700;color:var(--color-charcoal-500);border-bottom:1px solid var(--color-charcoal-100);letter-spacing:.02em">
-                  <span>SCAN ID</span><span>PART</span><span>TIME</span><span style="text-align:right">MEAN mm</span><span style="text-align:right">COVERAGE</span><span style="text-align:right">RESULT</span>
-                </div>
-                <sc-for list="{{ recentScans }}" as="r" hint-placeholder-count="8">
-                  <div onClick="{{ r.click }}" style="display:grid;grid-template-columns:120px 1fr 130px 90px 90px 96px;gap:0;padding:12px 18px;align-items:center;border-bottom:1px solid var(--color-charcoal-100);cursor:pointer" style-hover="background:var(--color-gray-50)">
-                    <span style="font-family:var(--font-mono);font-size:12px;font-weight:600">{{ r.scanId }}</span>
-                    <span style="font-size:13px;color:var(--color-charcoal-700)">{{ r.part }}</span>
-                    <span style="font-family:var(--font-mono);font-size:11px;color:var(--color-charcoal-500)">{{ r.ts }}</span>
-                    <span style="font-family:var(--font-mono);font-size:13px;text-align:right">{{ r.mean }}</span>
-                    <span style="font-family:var(--font-mono);font-size:13px;text-align:right">{{ r.coverage }}%</span>
-                    <span style="display:flex;justify-content:flex-end"><span style="display:inline-flex;align-items:center;gap:5px;background:{{ r.res.bg }};color:{{ r.res.fg }};padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700"><span style="width:5px;height:5px;border-radius:50%;background:{{ r.res.fg }}"></span>{{ r.res.label }}</span></span>
-                  </div>
-                </sc-for>
-              </div>
+              </sc-for>
             </div>
           </sc-if>
-
-          <!-- ===== SCAN DETAIL ===== -->
-          <sc-if value="{{ aDetail }}" hint-placeholder-val="{{ false }}">
-            <div style="display:grid;grid-template-columns:1.15fr 1fr;gap:16px;align-items:start">
-              <!-- heatmap -->
-              <div style="border:1px solid var(--color-charcoal-100);background:#fff">
-                <div style="padding:14px 18px;border-bottom:1px solid var(--color-charcoal-100);display:flex;align-items:center;justify-content:space-between">
-                  <div><div style="font-weight:700;font-size:15px">Deviation cloud</div><div style="font-size:11px;color:var(--color-charcoal-500);font-family:var(--font-mono)">{{ dScanId }}</div></div>
-                  <span style="display:inline-flex;align-items:center;gap:5px;background:{{ dRes.bg }};color:{{ dRes.fg }};padding:3px 10px;border-radius:4px;font-size:12px;font-weight:700"><span style="width:6px;height:6px;border-radius:50%;background:{{ dRes.fg }}"></span>{{ dRes.label }}</span>
-                </div>
-                <!-- Open3D launcher -->
-                <div style="display:flex;align-items:center;gap:12px;padding:14px 18px;border-bottom:1px solid var(--color-charcoal-100)">
-                  <div style="width:34px;height:34px;border-radius:8px;background:var(--color-charcoal-900);display:flex;align-items:center;justify-content:center;flex:none">
-                    <svg width="18" height="18" fill="none" stroke="var(--color-lime-500)" stroke-width="2"><use href="assets/icons.svg#zoom-in"/></svg>
-                  </div>
-                  <div style="min-width:0"><div style="font-weight:700;font-size:14px">Open3D</div><div style="font-size:11px;color:var(--color-charcoal-500);font-family:var(--font-mono)">signed-distance point cloud · native window</div></div>
-                  <span style="margin-left:auto;display:inline-flex;align-items:center;gap:6px;background:{{ o3dStatusBg }};color:{{ o3dStatusFg }};padding:3px 10px;border-radius:4px;font-size:12px;font-weight:700"><span style="width:6px;height:6px;border-radius:50%;background:{{ o3dStatusFg }}"></span>{{ o3dStatusLabel }}</span>
-                </div>
-
-                <sc-if value="{{ o3dIdle }}" hint-placeholder-val="{{ true }}">
-                  <div style="padding:34px 22px;display:flex;flex-direction:column;align-items:center;gap:14px;text-align:center">
-                    <div style="width:56px;height:56px;border-radius:10px;background:var(--color-blue-50);display:flex;align-items:center;justify-content:center">
-                      <svg width="26" height="26" fill="none" stroke="var(--color-blue-500)" stroke-width="2"><use href="assets/icons.svg#zoom-in"/></svg>
-                    </div>
-                    <div style="max-width:340px;font-size:13px;color:var(--color-charcoal-600)">Open the coloured deviation cloud for this scan in Open3D to inspect exactly where the surface drifts from CAD.</div>
-                    <button onClick="{{ openOpen3d }}" style="height:46px;padding:0 22px;border:0;border-radius:6px;background:#000;color:#fff;font-weight:700;font-size:14px;font-family:var(--font-sans);cursor:pointer;display:inline-flex;align-items:center;gap:8px"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><use href="assets/icons.svg#zoom-in"/></svg>Open in Open3D</button>
-                  </div>
-                </sc-if>
-
-                <sc-if value="{{ o3dOpening }}" hint-placeholder-val="{{ false }}">
-                  <div style="padding:44px 22px;display:flex;flex-direction:column;align-items:center;gap:16px;text-align:center">
-                    <div style="width:34px;height:34px;border:3px solid var(--color-charcoal-100);border-top-color:var(--color-blue-500);border-radius:50%;animation:qcspin .8s linear infinite"></div>
-                    <div style="font-size:14px;font-weight:700">Opening Open3D…</div>
-                    <div style="font-size:12px;color:var(--color-charcoal-500);font-family:var(--font-mono)">launching viewer on host · loading {{ o3dFile }}</div>
-                  </div>
-                </sc-if>
-
-                <sc-if value="{{ o3dOpen }}" hint-placeholder-val="{{ false }}">
-                  <div style="padding:16px">
-                    <div style="border:1px solid var(--color-charcoal-200);border-radius:6px;overflow:hidden">
-                      <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--color-charcoal-900)">
-                        <span style="width:9px;height:9px;border-radius:50%;background:#DA1E28"></span>
-                        <span style="width:9px;height:9px;border-radius:50%;background:#f59e0b"></span>
-                        <span style="width:9px;height:9px;border-radius:50%;background:#45ae4a"></span>
-                        <span style="margin-left:6px;font-family:var(--font-mono);font-size:11px;color:rgba(255,255,255,.75)">Open3D — {{ o3dFile }}</span>
-                      </div>
-                      <div style="background:#101727;padding:30px 18px;display:flex;flex-direction:column;align-items:center;gap:12px;text-align:center">
-                        <svg width="40" height="40" fill="none" stroke="var(--color-lime-500)" stroke-width="1.6"><use href="assets/icons.svg#zoom-in"/></svg>
-                        <div style="color:#fff;font-size:13px;font-weight:600">Coloured deviation cloud open in Open3D on the host</div>
-                        <div style="color:rgba(255,255,255,.55);font-size:11.5px;font-family:var(--font-mono);max-width:340px;line-height:1.5">green within ±0.50 mm → red out of tolerance · 478,900 points</div>
-                        <div style="display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--color-lime-500);font-family:var(--font-mono);margin-top:2px"><span style="width:6px;height:6px;border-radius:50%;background:var(--color-lime-500);animation:qcpulse 1.4s infinite"></span>open3d viewer active · PID 5137</div>
-                      </div>
-                    </div>
-                    <div style="display:flex;gap:8px;margin-top:12px">
-                      <button onClick="{{ openOpen3d }}" style="flex:1;height:40px;border:1px solid var(--color-charcoal-200);border-radius:6px;background:#fff;color:#000;font-weight:600;font-size:13px;font-family:var(--font-sans);cursor:pointer">Bring to front</button>
-                      <button onClick="{{ closeOpen3d }}" style="flex:none;height:40px;padding:0 16px;border:1px solid var(--color-charcoal-200);border-radius:6px;background:#fff;color:var(--color-charcoal-600);font-weight:600;font-size:13px;font-family:var(--font-sans);cursor:pointer">Close window</button>
-                    </div>
-                  </div>
-                </sc-if>
-
-                <div style="padding:14px 18px;border-top:1px solid var(--color-charcoal-100)">
-                  <div style="font-size:10px;font-weight:700;letter-spacing:.04em;color:var(--color-charcoal-500);margin-bottom:6px">DEVIATION SCALE</div>
-                  <div style="height:12px;border-radius:3px;background:linear-gradient(90deg,#45ae4a 0%,#8fd44a 30%,#f59e0b 60%,#da1e28 100%)"></div>
-                  <div style="display:flex;justify-content:space-between;font-size:10px;font-family:var(--font-mono);color:var(--color-charcoal-500);margin-top:5px"><span>0.00 mm</span><span style="color:#000;font-weight:700">±0.50 tol</span><span>0.75+ mm</span></div>
-                </div>
-              </div>
-              <!-- numbers -->
-              <div style="display:flex;flex-direction:column;gap:14px">
-                <div style="border:1px solid var(--color-charcoal-100);background:#fff;padding:18px">
-                  <div style="font-weight:700;font-size:15px;margin-bottom:2px">{{ dPart }}</div>
-                  <div style="font-family:var(--font-mono);font-size:11px;color:var(--color-charcoal-500)">{{ dPartId }}</div>
-                  <div style="display:flex;align-items:center;gap:8px;margin-top:14px;padding:10px 12px;background:{{ dPassBg }};border-radius:6px">
-                    <svg width="18" height="18" fill="none" stroke="{{ dPassFg }}" stroke-width="2"><use href="assets/icons.svg#check-circle"/></svg>
-                    <span style="font-weight:700;font-size:14px;color:{{ dPassFg }}">{{ dPassFail }}</span>
-                    <span style="margin-left:auto;font-family:var(--font-mono);font-size:12px;color:var(--color-charcoal-600)">tol {{ dTolerance }} mm</span>
-                  </div>
-                  <sc-if value="{{ dReasonShow }}" hint-placeholder-val="{{ false }}">
-                    <div style="margin-top:8px;font-size:12px;color:#A10000;display:flex;align-items:center;gap:6px"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><use href="assets/icons.svg#alert-triangle"/></svg>{{ dReason }}</div>
-                  </sc-if>
-                  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:16px">
-                    <div><div style="font-size:11px;color:var(--color-charcoal-500)">Mean deviation</div><div style="font-family:var(--font-mono);font-size:22px;font-weight:700">{{ dMean }}<span style="font-size:11px"> mm</span></div></div>
-                    <div><div style="font-size:11px;color:var(--color-charcoal-500)">RMSE</div><div style="font-family:var(--font-mono);font-size:22px;font-weight:700">{{ dRmse }}<span style="font-size:11px"> mm</span></div></div>
-                    <div><div style="font-size:11px;color:var(--color-charcoal-500)">Std deviation</div><div style="font-family:var(--font-mono);font-size:22px;font-weight:700">{{ dStd }}<span style="font-size:11px"> mm</span></div></div>
-                    <div><div style="font-size:11px;color:var(--color-charcoal-500)">Coverage</div><div style="font-family:var(--font-mono);font-size:22px;font-weight:700">{{ dCoverage }}<span style="font-size:11px"> %</span></div></div>
-                  </div>
-                </div>
-                <div style="border:1px solid var(--color-charcoal-100);background:#fff;padding:18px">
-                  <div style="font-weight:700;font-size:14px;margin-bottom:12px">Deviation distribution</div>
-                  <svg viewBox="0 0 494 140" style="width:100%;height:130px">
-                    <line x1="10" y1="126" x2="484" y2="126" stroke="var(--color-charcoal-200)" stroke-width="1"/>
-                    <line x1="{{ histoTolX }}" y1="10" x2="{{ histoTolX }}" y2="126" stroke="#000" stroke-width="1.5" stroke-dasharray="4 3"/>
-                    <sc-for list="{{ histoBars }}" as="h" hint-placeholder-count="16">
-                      <rect x="{{ h.x }}" y="{{ h.y }}" width="{{ h.w }}" height="{{ h.h }}" fill="{{ h.fill }}" rx="1"></rect>
-                    </sc-for>
-                  </svg>
-                  <div style="display:flex;justify-content:space-between;font-size:10px;font-family:var(--font-mono);color:var(--color-charcoal-500);margin-top:2px"><span>0 mm</span><span>signed distance → CAD</span><span>0.9 mm</span></div>
-                </div>
-                <div style="border:1px solid var(--color-charcoal-100);background:#fff;padding:16px 18px;display:flex;flex-direction:column;gap:8px">
-                  <div style="display:flex;justify-content:space-between;font-size:12px"><span style="color:var(--color-charcoal-500)">Alignment</span><span style="font-weight:600;text-align:right;max-width:60%">{{ dAlign }}</span></div>
-                  <div style="display:flex;justify-content:space-between;font-size:12px"><span style="color:var(--color-charcoal-500)">Points evaluated</span><span style="font-family:var(--font-mono);font-weight:600">{{ dPoints }}</span></div>
-                  <div style="display:flex;justify-content:space-between;font-size:12px"><span style="color:var(--color-charcoal-500)">Captured</span><span style="font-family:var(--font-mono);font-weight:600">{{ dDate }}</span></div>
-                </div>
-              </div>
-            </div>
-          </sc-if>
-
-          <!-- ===== PART HISTORY ===== -->
-          <sc-if value="{{ aHistory }}" hint-placeholder-val="{{ false }}">
-            <div style="display:grid;grid-template-columns:240px 1fr;gap:16px;align-items:start">
-              <div style="border:1px solid var(--color-charcoal-100);background:#fff;padding:14px">
-                <div style="font-size:11px;font-weight:700;color:var(--color-charcoal-500);margin-bottom:10px;letter-spacing:.04em">PART ID</div>
-                <div style="display:flex;flex-direction:column;gap:8px">
-                  <sc-for list="{{ histParts }}" as="p" hint-placeholder-count="3">
-                    <button onClick="{{ p.click }}" style="{{ p.style }}">{{ p.name }}</button>
-                  </sc-for>
-                </div>
-              </div>
-              <div style="display:flex;flex-direction:column;gap:16px">
-                <div style="border:1px solid var(--color-charcoal-100);background:#fff;padding:18px">
-                  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
-                    <div style="font-weight:700;font-size:15px">Mean deviation trend</div>
-                    <div style="font-size:12px;color:var(--color-charcoal-500)">{{ histPartName }} · {{ histCount }} scans</div>
-                  </div>
-                  <svg viewBox="0 0 540 150" style="width:100%;height:190px">
-                    <line x1="20" y1="136" x2="530" y2="136" stroke="var(--color-charcoal-200)" stroke-width="1"/>
-                    <line x1="20" y1="{{ histTolY }}" x2="530" y2="{{ histTolY }}" stroke="#da1e28" stroke-width="1.2" stroke-dasharray="5 4"/>
-                    <polyline points="{{ histPoints }}" fill="none" stroke="#5631ea" stroke-width="2.5"/>
-                    <sc-for list="{{ histDots }}" as="d" hint-placeholder-count="5">
-                      <circle cx="{{ d.cx }}" cy="{{ d.cy }}" r="4.5" fill="{{ d.fill }}" stroke="#fff" stroke-width="1.5"></circle>
-                    </sc-for>
-                  </svg>
-                  <div style="font-size:10px;font-family:var(--font-mono);color:#da1e28;margin-top:2px">— — tolerance limit 0.50 mm</div>
-                </div>
-                <div style="border:1px solid var(--color-charcoal-100);background:#fff">
-                  <div style="display:grid;grid-template-columns:120px 130px 90px 90px 96px;gap:0;padding:10px 18px;font-size:11px;font-weight:700;color:var(--color-charcoal-500);border-bottom:1px solid var(--color-charcoal-100)">
-                    <span>SCAN ID</span><span>TIME</span><span style="text-align:right">MEAN</span><span style="text-align:right">RMSE</span><span style="text-align:right">RESULT</span>
-                  </div>
-                  <sc-for list="{{ histScans }}" as="r" hint-placeholder-count="4">
-                    <div style="display:grid;grid-template-columns:120px 130px 90px 90px 96px;gap:0;padding:12px 18px;align-items:center;border-bottom:1px solid var(--color-charcoal-100)">
-                      <span style="font-family:var(--font-mono);font-size:12px;font-weight:600">{{ r.scanId }}</span>
-                      <span style="font-family:var(--font-mono);font-size:11px;color:var(--color-charcoal-500)">{{ r.ts }}</span>
-                      <span style="font-family:var(--font-mono);font-size:13px;text-align:right">{{ r.mean }}</span>
-                      <span style="font-family:var(--font-mono);font-size:13px;text-align:right">{{ r.rmse }}</span>
-                      <span style="display:flex;justify-content:flex-end"><span style="display:inline-flex;align-items:center;gap:5px;background:{{ r.res.bg }};color:{{ r.res.fg }};padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700">{{ r.res.label }}</span></span>
-                    </div>
-                  </sc-for>
-                </div>
-              </div>
-            </div>
-          </sc-if>
-
         </div>
       </div>
     </sc-if>
@@ -709,8 +485,9 @@
           <div style="border:1px solid var(--color-charcoal-100);background:#fff">
             <div style="padding:12px 16px;border-bottom:1px solid var(--color-charcoal-100);display:flex;align-items:center;gap:8px">
               <span style="font-weight:700;font-size:14px">Joint states</span>
-              <span style="font-size:11px;font-family:var(--font-mono);color:var(--color-charcoal-500)">/arm_controller/joint_states · 250 Hz</span>
-              <span style="margin-left:auto;font-size:11px;color:var(--color-charcoal-500)">live position from the arm · slider/field set a target (motion command not wired yet)</span>
+              <span style="font-size:11px;font-family:var(--font-mono);color:var(--color-charcoal-500)">live from /api/robot/joints</span>
+              <span style="margin-left:auto;font-size:11px;color:var(--color-charcoal-500)">position is live · slider/field set a target, then Jog</span>
+              <button onClick="{{ jogToTargets }}" style="margin-left:12px;display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 14px;border:0;border-radius:6px;background:#000;color:#fff;font-size:12px;font-weight:700;cursor:pointer;font-family:var(--font-sans)"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><use href="assets/icons.svg#lightning"/></svg>Jog to targets</button>
             </div>
             <div style="display:grid;grid-template-columns:150px 1fr 118px 66px 62px 54px;gap:0;padding:9px 16px;font-size:10.5px;font-weight:700;color:var(--color-charcoal-500);border-bottom:1px solid var(--color-charcoal-100);letter-spacing:.02em">
               <span>JOINT</span><span>COMMAND</span><span style="text-align:center">POSITION</span><span style="text-align:right">VEL</span><span style="text-align:right">TORQUE</span><span style="text-align:right">TEMP</span>
@@ -739,7 +516,7 @@
           <div style="border:1px solid var(--color-charcoal-100);background:#fff">
             <div style="padding:12px 16px;border-bottom:1px solid var(--color-charcoal-100);display:flex;align-items:center;gap:10px">
               <span style="font-weight:700;font-size:14px">ROS2 network</span>
-              <span style="font-size:11px;font-family:var(--font-mono);color:var(--color-charcoal-500)">node graph</span>
+              <span style="font-size:11px;font-family:var(--font-mono);color:var(--color-charcoal-500)">reference topology · not live</span>
               <span style="margin-left:auto;display:flex;align-items:center;gap:14px;font-size:10.5px;color:var(--color-charcoal-600)">
                 <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:14px;height:3px;border-radius:2px;background:#5631ea"></span>command</span>
                 <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:14px;height:3px;border-radius:2px;background:#0f62fe"></span>motion</span>
@@ -780,7 +557,7 @@
             <div style="border:1px solid var(--color-charcoal-100);background:#fff">
               <div style="padding:12px 16px;border-bottom:1px solid var(--color-charcoal-100);display:flex;align-items:center;gap:8px">
                 <span style="font-weight:700;font-size:14px">ROS2 nodes &amp; topics</span>
-                <span style="margin-left:auto;display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--color-green-900);font-weight:700"><span style="width:6px;height:6px;border-radius:50%;background:#45ae4a"></span>graph healthy</span>
+                <span style="margin-left:auto;display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--color-charcoal-500);font-weight:700"><span style="width:6px;height:6px;border-radius:50%;background:#c9ced6"></span>expected · not introspected</span>
               </div>
               <sc-for list="{{ ros2 }}" as="n" hint-placeholder-count="8">
                 <div style="display:flex;align-items:center;gap:10px;padding:9px 16px;border-bottom:1px solid var(--color-charcoal-100)">
@@ -796,22 +573,18 @@
             </div>
 
             <div style="border:1px solid var(--color-charcoal-100);background:#fff">
-              <div style="padding:12px 16px;border-bottom:1px solid var(--color-charcoal-100);font-weight:700;font-size:14px">MoveIt2 planning</div>
+              <div style="padding:12px 16px;border-bottom:1px solid var(--color-charcoal-100);font-weight:700;font-size:14px">Path plan · last run</div>
               <div style="padding:16px;display:flex;flex-direction:column;gap:12px">
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-                  <div><div style="font-size:11px;color:var(--color-charcoal-500)">Planner</div><div style="font-family:var(--font-mono);font-size:13px;font-weight:600">RRTConnect</div></div>
-                  <div><div style="font-size:11px;color:var(--color-charcoal-500)">Plan time</div><div style="font-family:var(--font-mono);font-size:13px;font-weight:600">0.44 s</div></div>
-                  <div><div style="font-size:11px;color:var(--color-charcoal-500)">Waypoints</div><div style="font-family:var(--font-mono);font-size:13px;font-weight:600">66</div></div>
-                  <div><div style="font-size:11px;color:var(--color-charcoal-500)">Max joint vel</div><div style="font-family:var(--font-mono);font-size:13px;font-weight:600">82%</div></div>
+                  <div><div style="font-size:11px;color:var(--color-charcoal-500)">Waypoints</div><div style="font-family:var(--font-mono);font-size:13px;font-weight:600">{{ planWaypoints }}</div></div>
+                  <div><div style="font-size:11px;color:var(--color-charcoal-500)">Raster lines</div><div style="font-family:var(--font-mono);font-size:13px;font-weight:600">{{ planLines }}</div></div>
+                  <div><div style="font-size:11px;color:var(--color-charcoal-500)">Raster spacing</div><div style="font-family:var(--font-mono);font-size:13px;font-weight:600">{{ planSpacing }}</div></div>
+                  <div><div style="font-size:11px;color:var(--color-charcoal-500)">Max incidence</div><div style="font-family:var(--font-mono);font-size:13px;font-weight:600">{{ planIncidence }}</div></div>
                 </div>
-                <div>
-                  <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:5px"><span style="color:var(--color-charcoal-500)">Executed</span><span style="font-family:var(--font-mono);font-weight:700">66 / 66</span></div>
-                  <div style="height:8px;background:var(--color-charcoal-100);border-radius:4px;overflow:hidden"><div style="height:100%;width:100%;background:#45ae4a"></div></div>
-                </div>
-                <div style="display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--color-charcoal-100);padding-top:12px">
-                  <div style="display:flex;align-items:center;gap:8px;font-size:12px"><svg width="15" height="15" fill="none" stroke="#125D1A" stroke-width="2"><use href="assets/icons.svg#check-circle"/></svg><span>Self-collision check passed</span></div>
-                  <div style="display:flex;align-items:center;gap:8px;font-size:12px"><svg width="15" height="15" fill="none" stroke="#125D1A" stroke-width="2"><use href="assets/icons.svg#check-circle"/></svg><span>Environment collision check passed</span></div>
-                  <div style="display:flex;align-items:center;gap:8px;font-size:12px"><svg width="15" height="15" fill="none" stroke="#125D1A" stroke-width="2"><use href="assets/icons.svg#check-circle"/></svg><span>Trajectory within joint limits</span></div>
+                <div style="font-size:11px;color:var(--color-charcoal-500)">CAD source</div>
+                <div style="font-family:var(--font-mono);font-size:12px;font-weight:600;margin-top:-8px;word-break:break-all">{{ planCad }}</div>
+                <div style="border-top:1px solid var(--color-charcoal-100);padding-top:12px;font-size:11.5px;color:var(--color-charcoal-500);line-height:1.5">
+                  From the coverage-path planner (<span style="font-family:var(--font-mono)">/api/plan</span>). MoveIt2 trajectory planning + collision checking run in the qc-humble container and aren't reported here yet.
                 </div>
               </div>
             </div>
@@ -866,53 +639,49 @@
 class Component extends DCLogic {
   constructor(props){
     super(props);
-    const PARTS = [
-      { id:'DEX05120563 B18 - Bearing press tool - Location pin small_Rev 0', short:'Bearing press tool — Location pin (small)', file:'DEX05120563_B18.stl', dims:'420 × 180 × 120 mm', tris:'184,220' },
-      { id:'DEX04980114 A02 - Gearbox mount bracket_Rev 2', short:'Gearbox mount bracket', file:'DEX04980114_A02.stl', dims:'310 × 240 × 95 mm', tris:'96,540' },
-      { id:'DEX05233907 C11 - Sensor housing cap_Rev 1', short:'Sensor housing cap', file:'DEX05233907_C11.stl', dims:'180 × 180 × 70 mm', tris:'52,110' },
-    ];
-    this.PARTS = PARTS;
-    this.REASONS={deviation:'Deviation out of tolerance',coverage:'Missing coverage',density:'Low point density',outliers:'High outlier ratio'};
-    const mk=(scanId,pi,date,ts,result,mean,rmse,std,cov,reason,att)=>({scanId,part:PARTS[pi].short,partIdx:pi,partId:PARTS[pi].id,date,ts,result,mean,rmse,std,cov,reason,att});
-    // No real QC pipeline exists yet (no scanner capture / registration /
-    // pass-fail), so there is no scan data to show. Empty on purpose -> the
-    // Analytics tab renders an empty state. When a real results store lands,
-    // populate this (or fetch it from the backend) and the dashboards return.
+    // Parts come from the backend (GET /api/parts), which lists the real CAD
+    // files in config/cad/. Populated by _loadParts() on mount; empty until
+    // then, so the app never shows a part that can't actually be planned.
+    this.PARTS = [];
+    // Recorded scans come from the backend results store (GET /api/scans),
+    // loaded by _loadScans(). Empty until a scan is run. Every record is a
+    // real (currently 'incomplete') result -- no fabricated history.
     this.SCANS=[];
+    // Joint rows: min/max are the real SR5 limits (used to clamp jog targets).
+    // Position/velocity/torque start at 0 (no reading) and are filled by the
+    // live poll (/api/robot/joints) once connected. Temperature isn't exposed
+    // by the driver, so it stays '—'. The rail is a separate axis and isn't
+    // commanded from this console yet, so its row is display-only.
     const JOINTS0=[
-      {n:'J1 · base',v:12.4,u:'°',vel:0.0,tq:18,t:34,min:-170,max:170},
-      {n:'J2 · shoulder',v:-38.2,u:'°',vel:0.0,tq:41,t:37,min:-120,max:120},
-      {n:'J3 · elbow',v:74.6,u:'°',vel:0.0,tq:33,t:36,min:-170,max:170},
-      {n:'J4 · wrist 1',v:-22.1,u:'°',vel:0.0,tq:9,t:33,min:-170,max:170},
-      {n:'J5 · wrist 2',v:61.0,u:'°',vel:0.0,tq:12,t:34,min:-120,max:120},
-      {n:'J6 · wrist 3',v:5.3,u:'°',vel:0.0,tq:6,t:33,min:-360,max:360},
-      {n:'Rail · linear',v:0.35,u:'m',vel:0.0,tq:22,t:31,min:0,max:3},
+      {n:'J1 · base',v:0,u:'°',vel:0.0,tq:0,t:0,min:-170,max:170},
+      {n:'J2 · shoulder',v:0,u:'°',vel:0.0,tq:0,t:0,min:-120,max:120},
+      {n:'J3 · elbow',v:0,u:'°',vel:0.0,tq:0,t:0,min:-170,max:170},
+      {n:'J4 · wrist 1',v:0,u:'°',vel:0.0,tq:0,t:0,min:-170,max:170},
+      {n:'J5 · wrist 2',v:0,u:'°',vel:0.0,tq:0,t:0,min:-120,max:120},
+      {n:'J6 · wrist 3',v:0,u:'°',vel:0.0,tq:0,t:0,min:-360,max:360},
+      {n:'Rail · linear',v:0,u:'m',vel:0.0,tq:0,t:0,min:0,max:3},
     ];
-    const LOGS0=[
-      {t:'11:52:12.417',l:'info',src:'qc',m:'Point cloud registered · TEASER++ + ICP · fitness 0.981'},
-      {t:'11:52:07.882',l:'warn',src:'scanner',m:'Frame drop on /miraco/depth (1 frame)'},
-      {t:'11:52:04.010',l:'info',src:'traj',m:'Executing trajectory on /arm_controller'},
-      {t:'11:52:03.664',l:'info',src:'moveit',m:'Path found · 66 waypoints · plan 0.44 s'},
-      {t:'11:52:03.221',l:'info',src:'moveit',m:'Planning request received (RRTConnect)'},
-      {t:'11:52:01.550',l:'info',src:'ros2',m:'/scan_cell/state → READY'},
-    ];
+    const LOGS0=[];
     this.state = {
       tab:'run',
-      // connection is driven by the real backend (/api/robot/*), not assumed.
-      connected:false, robotKind:null, robotNote:'', ip:'192.168.2.160', motorsOn:true, dragMode:false, homed:true,
+      // connection + power/mode are driven by the real backend (/api/robot/*).
+      connected:false, robotKind:null, robotNote:'', ip:'192.168.2.160',
+      power:null, mode:null,            // real motor power / operate mode strings
+      motorsOn:false, dragMode:false, homed:false,
       eStop:false, softStop:false,
       stage:'load',
-      partId: PARTS[0].id, matched:null,
+      partId:'', matched:null,
       progress:0, passNum:1, attempts:0, result:null,
+      scanRec:null, scanBusy:false,     // real scan record + in-flight flag
       view:'iso', gridOn:true, pathOn:true, povOn:true,
       planning:false, planError:null,   // real /api/plan call status (see generatePath)
       clock:'',
-      railPos:'0.00 m',
+      railPos:'—',
       aTab:'dashboard', selScan:0, histPart:0,
       joints:JOINTS0, logs:LOGS0, logFilter:'all',
-      rviz:'idle', open3d:'idle',
+      rviz:'idle',
     };
-    this._scanT=0; this._targetVec=null; this._logSeq=1;
+    this._logSeq=1;
   }
 
   // ---------- lifecycle ----------
@@ -929,33 +698,105 @@ class Component extends DCLogic {
     this._robotConnect();
     this._statusTick = setInterval(()=>this._pollStatus(), 2000);
     this._jointTick = setInterval(()=>{ if(this.state.tab==='debug') this._pollJoints(); }, 1000);
-    this._loop();
+    // Load the real part catalogue + recorded scans from the backend.
+    this._loadParts();
+    this._loadScans();
   }
+
+  // ---------- real part catalogue (backend /api/parts) ----------
+  _loadParts=async ()=>{
+    try{
+      const d = await (await fetch('/api/parts')).json();
+      const parts = (d && d.ok && Array.isArray(d.parts)) ? d.parts : [];
+      this.PARTS = parts;
+      if(parts.length){
+        this.setState(s=>({partId: s.partId || parts[0].id}));
+        this._log('info','app', parts.length+' part'+(parts.length===1?'':'s')+' available in config/cad');
+      } else {
+        this._log('warn','app','No CAD files found in config/cad — add a STEP file to plan a part');
+      }
+      this.forceUpdate();
+    }catch(e){ this._log('error','app','Could not load parts: '+e); }
+  };
+
+  // ---------- recorded scans (backend results store /api/scans) ----------
+  _loadScans=async ()=>{
+    try{
+      const d = await (await fetch('/api/scans')).json();
+      this.SCANS = (d && d.ok && Array.isArray(d.scans)) ? d.scans : [];
+      this.forceUpdate();
+    }catch(e){ /* store unavailable; leave last known */ }
+  };
+
+  // ---------- log helper ----------
+  _log=(level, src, msg)=>{
+    const d=new Date();
+    const t=d.toTimeString().slice(0,8)+'.'+String(d.getMilliseconds()).padStart(3,'0');
+    this.setState(s=>({logs:[{t,l:level,src,m:msg},...s.logs].slice(0,200)}));
+  };
 
   // ---------- real robot connection (backend /api/robot/*) ----------
   _robotConnect=async ()=>{
+    const ip=this.state.ip;
     try{
       const res = await fetch('/api/robot/connect', {method:'POST',
-        headers:{'Content-Type':'application/json'}, body: JSON.stringify({ip:this.state.ip})});
+        headers:{'Content-Type':'application/json'}, body: JSON.stringify({ip})});
       const s = await res.json();
-      this.setState({connected:!!s.connected, robotKind:s.kind||null, robotNote:s.note||''});
-    }catch(e){ this.setState({connected:false, robotKind:null, robotNote:String(e)}); }
+      const wasConnected=this.state.connected;
+      this._applyStatus(s);
+      if(s.connected && !wasConnected)
+        this._log('info','arm',`Connected to SR5 at ${ip}`+(s.info?` · ${s.info.type||''} · SDK ${s.sdkVersion||'?'}`:''));
+      else if(!s.connected)
+        this._log('warn','arm',`Not connected to ${ip}` + (s.note?` · ${s.note}`:''));
+    }catch(e){
+      this.setState({connected:false, robotKind:null, robotNote:String(e)});
+      this._log('error','arm',`Connect request failed: ${e}`);
+    }
   };
   _pollStatus=async ()=>{
     try{
       const s = await (await fetch('/api/robot/status')).json();
-      if(this.state.connected!==!!s.connected || this.state.robotKind!==(s.kind||null))
-        this.setState({connected:!!s.connected, robotKind:s.kind||null, robotNote:s.note||''});
+      const wasConnected=this.state.connected;
+      this._applyStatus(s);
+      if(wasConnected && !s.connected)
+        this._log('warn','arm',`Lost connection to ${s.ip||this.state.ip}`+(s.note?` · ${s.note}`:''));
+      else if(!wasConnected && s.connected)
+        this._log('info','arm',`Connection restored at ${s.ip||this.state.ip}`);
     }catch(e){ /* transient; leave last known state */ }
+  };
+  // Merge a backend status/motion response into UI state, deriving the
+  // motors/drag indicators from the arm's REAL reported power + operate mode
+  // (falling back to the previous value when a field isn't present).
+  _deriveMotor=(power, mode)=>{
+    const p=(power||'').toString().toLowerCase(), m=(mode||'').toString().toLowerCase();
+    const on = /on/.test(p) && !/off|estop|gstop|stop/.test(p);
+    const drag = /drag|manual/.test(m);
+    return {on, drag};
+  };
+  _applyStatus=(s)=>{
+    if(!s) return;
+    const patch={connected:!!s.connected, robotKind:s.kind||null,
+                 robotNote:s.note||s.error||'', ip:s.ip||this.state.ip};
+    if('power' in s) patch.power=s.power;
+    if('mode' in s)  patch.mode=s.mode;
+    // Only re-derive the indicators when we actually got power/mode back;
+    // otherwise a bare status (disconnected) shouldn't wipe them.
+    if(s.connected && (s.power!=null || s.mode!=null)){
+      const d=this._deriveMotor(s.power, s.mode);
+      patch.motorsOn=d.on; patch.dragMode=d.drag;
+    } else if(!s.connected){
+      patch.motorsOn=false; patch.dragMode=false;
+    }
+    this.setState(patch);
   };
   _pollJoints=async ()=>{
     try{
       const d = await (await fetch('/api/robot/joints')).json();
       if(!d.connected || !d.joints || !d.joints.length) return;
       // If the operator just moved a slider / typed an angle, hold that value
-      // for a few seconds instead of snapping it back to the live read (there
-      // is no motion-command endpoint wired yet, so the two would otherwise
-      // fight). Velocity/torque telemetry always updates.
+      // for a few seconds instead of snapping it back to the live read, so a
+      // target being dialled in isn't overwritten before "Jog" is pressed.
+      // Velocity/torque telemetry always updates.
       const holding = this._jointHold && performance.now() < this._jointHold;
       // Map live arm joints (6) onto the display rows by index; extra rows
       // (e.g. the rail) are left untouched.
@@ -973,306 +814,8 @@ class Component extends DCLogic {
     clearInterval(this._statusTick);
     clearInterval(this._jointTick);
     clearTimeout(this._ipT);
-    clearTimeout(this._rvizT); clearTimeout(this._o3dT);
-    if(this._raf) cancelAnimationFrame(this._raf);
   }
   componentDidUpdate(){}
-
-  // ---------- THREE: cell scene ----------
-  _initThree(){
-    const THREE=window.THREE; if(!THREE) return;
-    this._THREE=THREE; this._OC=THREE.OrbitControls; this._STL=THREE.STLLoader;
-    const host=document.getElementById('viewport-host'); if(!host) return;
-    const scene=new THREE.Scene();
-    scene.background=new THREE.Color('#e9edf2');
-    this.scene=scene;
-
-    const cam=new THREE.PerspectiveCamera(45,1,0.05,50);
-    cam.position.set(1.5,1.15,1.4);
-    this.cam=cam;
-
-    const r=new THREE.WebGLRenderer({antialias:true,preserveDrawingBuffer:true});
-    r.setPixelRatio(Math.min(devicePixelRatio,2));
-    r.shadowMap.enabled=true; r.shadowMap.type=THREE.PCFSoftShadowMap;
-    host.appendChild(r.domElement); this.renderer=r;
-
-    const ctrl=new THREE.OrbitControls(cam,r.domElement);
-    ctrl.enableDamping=true; ctrl.dampingFactor=.09;
-    ctrl.target.set(0.37,0.12,0); ctrl.minDistance=0.6; ctrl.maxDistance=6;
-    ctrl.maxPolarAngle=Math.PI*0.52;
-    this.ctrl=ctrl;
-
-    scene.add(new THREE.HemisphereLight('#ffffff','#9aa3b0',0.85));
-    const dir=new THREE.DirectionalLight('#ffffff',0.85);
-    dir.position.set(1.6,2.4,1.2); dir.castShadow=true;
-    dir.shadow.mapSize.set(1024,1024); dir.shadow.camera.near=0.5; dir.shadow.camera.far=8;
-    dir.shadow.camera.left=-2.5; dir.shadow.camera.right=2.5; dir.shadow.camera.top=2.5; dir.shadow.camera.bottom=-2.5;
-    scene.add(dir);
-
-    // floor
-    const floor=new THREE.Mesh(new THREE.PlaneGeometry(8,8), new THREE.MeshStandardMaterial({color:'#dfe3e9',roughness:.95,metalness:0}));
-    floor.rotation.x=-Math.PI/2; floor.position.y=-0.62; floor.receiveShadow=true; scene.add(floor);
-    const grid=new THREE.GridHelper(8,32,'#b9c0cc','#cbd1db');
-    grid.position.y=-0.619; this.grid=grid; scene.add(grid);
-
-    // ---- linear rail (3 m along X) ----
-    const railGrp=new THREE.Group(); scene.add(railGrp);
-    const railZ=-0.5; this.railZ=railZ; this.railMinX=-0.5; this.railMaxX=1.3;
-    const railMat=new THREE.MeshStandardMaterial({color:'#3a4150',roughness:.5,metalness:.7});
-    const beam=new THREE.Mesh(new THREE.BoxGeometry(3.0,0.06,0.24),railMat);
-    beam.position.set(0.4,-0.59,railZ); beam.castShadow=true; beam.receiveShadow=true; railGrp.add(beam);
-    for(const dz of [-0.07,0.07]){
-      const rail=new THREE.Mesh(new THREE.BoxGeometry(3.0,0.03,0.03),new THREE.MeshStandardMaterial({color:'#8b93a1',metalness:.9,roughness:.3}));
-      rail.position.set(0.4,-0.55,railZ+dz); railGrp.add(rail);
-    }
-    // carriage
-    const carriage=new THREE.Group(); scene.add(carriage); this.carriage=carriage;
-    const cbody=new THREE.Mesh(new THREE.BoxGeometry(0.26,0.12,0.28),new THREE.MeshStandardMaterial({color:'#2b3140',metalness:.6,roughness:.4}));
-    cbody.position.y=-0.49; cbody.castShadow=true; carriage.add(cbody);
-    // column
-    const column=new THREE.Mesh(new THREE.CylinderGeometry(0.055,0.07,0.55,24),new THREE.MeshStandardMaterial({color:'#e8 eaee'.replace(' ',''),metalness:.3,roughness:.5}));
-    column.position.y=-0.16; column.castShadow=true; carriage.add(column);
-    const shoulderBase=new THREE.Mesh(new THREE.CylinderGeometry(0.07,0.07,0.08,24),new THREE.MeshStandardMaterial({color:'#c9ced6',metalness:.4,roughness:.4}));
-    shoulderBase.rotation.z=Math.PI/2; shoulderBase.position.y=0.13; carriage.add(shoulderBase);
-    this.shoulderY=0.13; this.carryTopY=-0.10;
-
-    // arm segments (rendered as cylinders between joints)
-    const linkMat=new THREE.MeshStandardMaterial({color:'#f4f5f7',metalness:.25,roughness:.45});
-    const jointMat=new THREE.MeshStandardMaterial({color:'#c3ef00',metalness:.2,roughness:.5});
-    this.upper=this._makeLink(linkMat,0.05); scene.add(this.upper);
-    this.fore=this._makeLink(linkMat,0.042); scene.add(this.fore);
-    this.elbowBall=new THREE.Mesh(new THREE.SphereGeometry(0.05,20,20),jointMat); this.elbowBall.castShadow=true; scene.add(this.elbowBall);
-    // scanner head
-    const head=new THREE.Group(); scene.add(head); this.head=head;
-    const hbox=new THREE.Mesh(new THREE.BoxGeometry(0.12,0.06,0.09),new THREE.MeshStandardMaterial({color:'#1b2230',metalness:.5,roughness:.4}));
-    head.add(hbox);
-    const lens=new THREE.Mesh(new THREE.CylinderGeometry(0.02,0.025,0.03,20),new THREE.MeshStandardMaterial({color:'#5631ea',emissive:'#5631ea',emissiveIntensity:.5}));
-    lens.rotation.x=Math.PI/2; lens.position.set(0,-0.04,0.03); head.add(lens);
-    // projected scan cone
-    const cone=new THREE.Mesh(new THREE.ConeGeometry(0.09,0.16,4,1,true),new THREE.MeshBasicMaterial({color:'#5631ea',transparent:true,opacity:.14,side:THREE.DoubleSide}));
-    cone.position.y=-0.12; cone.rotation.y=Math.PI/4; head.add(cone); this.cone=cone;
-
-    // ---- table + part + reference marker ----
-    const table=new THREE.Mesh(new THREE.BoxGeometry(1.2,0.05,0.7),new THREE.MeshStandardMaterial({color:'#b7bdc7',metalness:.2,roughness:.7}));
-    table.position.set(0.37,-0.025,0); table.receiveShadow=true; table.castShadow=true; scene.add(table);
-    this.px0=0.16; this.pz0=-0.09; // reference corner
-    // L marker
-    const mkMat=new THREE.MeshBasicMaterial({color:'#c3ef00'});
-    const mkA=new THREE.Mesh(new THREE.BoxGeometry(0.16,0.004,0.02),mkMat); mkA.position.set(this.px0+0.08,0.002,this.pz0); scene.add(mkA);
-    const mkB=new THREE.Mesh(new THREE.BoxGeometry(0.02,0.004,0.16),mkMat); mkB.position.set(this.px0,0.002,this.pz0+0.08); scene.add(mkB);
-
-    this.partGroup=new THREE.Group(); scene.add(this.partGroup);
-    this._buildPart(this.PARTS[0]);
-
-    // path lines
-    this.pathMat=new THREE.LineBasicMaterial({color:'#9aa3b0'});
-    this.pathLine=new THREE.Line(new THREE.BufferGeometry(),this.pathMat); scene.add(this.pathLine);
-    this.traceMat=new THREE.LineBasicMaterial({color:'#5631ea',linewidth:2});
-    this.traceLine=new THREE.Line(new THREE.BufferGeometry(),this.traceMat); scene.add(this.traceLine);
-    this.pathLine.visible=false; this.traceLine.visible=false;
-
-    // POV renderer
-    const povHost=document.getElementById('pov-host');
-    if(povHost){
-      const pr=new THREE.WebGLRenderer({antialias:true}); pr.setPixelRatio(Math.min(devicePixelRatio,2));
-      pr.setSize(230,150); povHost.appendChild(pr.domElement); this.povRenderer=pr;
-      this.povCam=new THREE.PerspectiveCamera(60,230/150,0.02,10);
-    }
-
-    this._homePose();
-    this._resize();
-    window.addEventListener('resize',this._resizeBound=()=>this._resize());
-  }
-
-  _makeLink(mat,rad){
-    const THREE=window.THREE;
-    const m=new THREE.Mesh(new THREE.CylinderGeometry(rad,rad,1,20),mat);
-    m.castShadow=true; return m;
-  }
-  _seg(mesh,a,b){
-    const THREE=window.THREE;
-    const dir=new THREE.Vector3().subVectors(b,a); const len=dir.length();
-    mesh.position.copy(a).add(b).multiplyScalar(0.5);
-    mesh.scale.set(1,len,1);
-    mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),dir.clone().normalize());
-  }
-
-  _buildPart(part){
-    const THREE=window.THREE;
-    while(this.partGroup.children.length) this.partGroup.remove(this.partGroup.children[0]);
-    // procedural "bearing press tool": base plate + boss + pin
-    const steel=new THREE.MeshStandardMaterial({color:'#8f97a4',metalness:.65,roughness:.35});
-    const dx=0.42,dz=0.18;
-    const plate=new THREE.Mesh(new THREE.BoxGeometry(dx,0.05,dz),steel); plate.position.y=0.025; plate.castShadow=true; plate.receiveShadow=true; this.partGroup.add(plate);
-    const boss=new THREE.Mesh(new THREE.CylinderGeometry(0.055,0.06,0.06,32),steel); boss.position.set(0.02,0.08,0); boss.castShadow=true; this.partGroup.add(boss);
-    const pin=new THREE.Mesh(new THREE.CylinderGeometry(0.016,0.016,0.07,24),steel); pin.position.set(0.02,0.135,0); pin.castShadow=true; this.partGroup.add(pin);
-    const rib=new THREE.Mesh(new THREE.BoxGeometry(0.03,0.04,dz*0.7),steel); rib.position.set(-0.15,0.07,0); rib.castShadow=true; this.partGroup.add(rib);
-    // place so min corner at reference
-    this.partGroup.position.set(this.px0+dx/2, 0, this.pz0+dz/2);
-    this.partDx=dx; this.partDz=dz; this.partTopY=0.135;
-  }
-
-  _genPath(){
-    const THREE=window.THREE;
-    const st=0.14; const y=this.partTopY+st;
-    const x0=this.partGroup.position.x-this.partDx/2+0.03, x1=this.partGroup.position.x+this.partDx/2-0.03;
-    const z0=this.partGroup.position.z-this.partDz/2+0.02, z1=this.partGroup.position.z+this.partDz/2-0.02;
-    const rows=6; const pts=[];
-    for(let i=0;i<rows;i++){
-      const z=z0+(z1-z0)*i/(rows-1);
-      const seq=i%2===0?[x0,x1]:[x1,x0];
-      const steps=10;
-      for(let j=0;j<=steps;j++){ pts.push(new THREE.Vector3(seq[0]+(seq[1]-seq[0])*j/steps, y, z)); }
-    }
-    this.pathPts=pts;
-    // cumulative lengths
-    let cum=[0]; for(let i=1;i<pts.length;i++) cum.push(cum[i-1]+pts[i].distanceTo(pts[i-1]));
-    this.pathCum=cum; this.pathLen=cum[cum.length-1];
-    const arr=new Float32Array(pts.length*3); pts.forEach((p,i)=>{arr[i*3]=p.x;arr[i*3+1]=p.y;arr[i*3+2]=p.z;});
-    this.pathLine.geometry.setAttribute('position',new THREE.BufferAttribute(arr,3));
-    this.traceLine.geometry.setAttribute('position',new THREE.BufferAttribute(arr.slice(),3));
-    this.traceLine.geometry.setDrawRange(0,0);
-    this.waypointCount=pts.length;
-  }
-  _pointAlong(t){
-    const THREE=window.THREE; const pts=this.pathPts,cum=this.pathCum;
-    const d=t*this.pathLen;
-    let i=1; while(i<cum.length && cum[i]<d) i++;
-    if(i>=cum.length) return pts[pts.length-1].clone();
-    const seg=cum[i]-cum[i-1]; const f=seg>0?(d-cum[i-1])/seg:0;
-    return pts[i-1].clone().lerp(pts[i],f);
-  }
-
-  _homePose(){
-    const THREE=window.THREE;
-    this._targetVec=new THREE.Vector3(0.0,0.55,this.railZ+0.28);
-    this._setArm(this._targetVec,true);
-  }
-  _setArm(target,snap){
-    const THREE=window.THREE; if(!this.carriage) return;
-    const L1=0.42,L2=0.40;
-    let cx=Math.max(this.railMinX,Math.min(this.railMaxX,target.x-0.02));
-    this.carriage.position.x=cx;
-    const shoulder=new THREE.Vector3(cx,this.shoulderY,this.railZ);
-    const d=new THREE.Vector3().subVectors(target,shoulder);
-    let r=Math.hypot(d.x,d.z); if(r<1e-4) r=1e-4;
-    const eH=new THREE.Vector3(d.x/r,0,d.z/r);
-    const dy=d.y;
-    let reach=Math.hypot(r,dy); reach=Math.min(reach,L1+L2-0.002); reach=Math.max(reach,0.05);
-    const a=Math.atan2(dy,r);
-    let cosOff=(L1*L1+reach*reach-L2*L2)/(2*L1*reach); cosOff=Math.max(-1,Math.min(1,cosOff));
-    const off=Math.acos(cosOff);
-    const shoulderAngle=a+off;
-    const P1=shoulder.clone().add(eH.clone().multiplyScalar(Math.cos(shoulderAngle)*L1)).add(new THREE.Vector3(0,Math.sin(shoulderAngle)*L1,0));
-    const P2=target.clone();
-    const carryTop=new THREE.Vector3(cx,this.carryTopY,this.railZ);
-    this._seg(this.upper,shoulder,P1);
-    this._seg(this.fore,P1,P2);
-    this.elbowBall.position.copy(P1);
-    // head at P2, look down at surface point
-    this.head.position.copy(P2);
-    const surf=new THREE.Vector3(target.x,this.partTopY,target.z);
-    this.head.lookAt(surf);
-    if(this.povCam){ this.povCam.position.copy(P2); this.povCam.up.set(0,0,-1); this.povCam.lookAt(surf); }
-    this.setState(s=>({railPos:cx.toFixed(2)+' m'}));
-  }
-
-  _resize(){
-    if(!this.renderer) return;
-    const host=document.getElementById('viewport-host'); if(!host) return;
-    const w=host.clientWidth||800, h=host.clientHeight||600;
-    this.renderer.setSize(w,h,false); this.cam.aspect=w/h; this.cam.updateProjectionMatrix();
-  }
-
-  _loop(){
-    this._raf=requestAnimationFrame(()=>this._loop());
-    const now=performance.now(); const dt=Math.min(0.05,(now-(this._last||now))/1000); this._last=now;
-    const st=this.state;
-    // advance scan progress (visualisation is external — RViz2 on host)
-    if((st.stage==='pass1'||st.stage==='pass2') && !st.eStop && !st.softStop && st.motorsOn){
-      const dur=11; this._scanT=Math.min(1,this._scanT+dt/dur);
-      const pct=Math.round(this._scanT*100);
-      if(pct!==st.progress) this.setState({progress:pct});
-      if(this._scanT>=1) this._onScanDone();
-    }
-  }
-
-  _onScanDone(){
-    this._scanT=0;
-    if(this.state.stage==='pass1'){
-      // Two separate scans, no human flip gate: pass 1 flows straight into
-      // pass 2 (the second scan of the same part). The loop in _loop() picks
-      // pass2 up on the next frame and runs it like pass 1.
-      this.setState({stage:'pass2',passNum:2,progress:0});
-    } else {
-      // pass2 -> compute result
-      this.setState({stage:'result',progress:0,result:'pass'});
-      this._homePose();
-    }
-  }
-
-  // ---------- heatmap (analytics) ----------
-  hmHostPresent(){ return !!document.getElementById('heatmap-host'); }
-  _initHeatmap(){
-    if(this._hmInit) return; this._hmInit=true;
-    try{
-    const THREE=this._THREE||window.THREE; const host=document.getElementById('heatmap-host'); if(!THREE||!host){ this._hmInit=false; return; }
-    const scene=new THREE.Scene(); scene.background=new THREE.Color('#0d1524'); this.hmScene=scene;
-    const cam=new THREE.PerspectiveCamera(45,host.clientWidth/host.clientHeight||1.4,0.01,50); cam.position.set(0.3,0.26,0.36); cam.lookAt(0,0,0); this.hmCam=cam;
-    const r=new THREE.WebGLRenderer({antialias:true,preserveDrawingBuffer:true}); r.setPixelRatio(Math.min(devicePixelRatio,2)); r.setSize(host.clientWidth,host.clientHeight); host.appendChild(r.domElement); this.hmRenderer=r;
-    const OC=this._OC||THREE.OrbitControls;
-    if(OC){ const ctrl=new OC(cam,r.domElement); ctrl.enableDamping=true; ctrl.target.set(0,0.0,0); ctrl.autoRotate=true; ctrl.autoRotateSpeed=0.9; ctrl.update(); this.hmCtrl=ctrl; }
-    scene.add(new THREE.HemisphereLight('#ffffff','#334',0.9));
-    const dl=new THREE.DirectionalLight('#fff',0.6); dl.position.set(1,2,1); scene.add(dl);
-    // build part from separate geometries, each vertex-coloured by signed-distance deviation
-    const hot=new THREE.Vector3(0.08,0.05,0.02);
-    const hot2=new THREE.Vector3(-0.14,0.05,0.0);
-    const maxd=0.75;
-    const colorGeo=(geo)=>{
-      geo.computeVertexNormals();
-      const pos=geo.attributes.position; const colors=[];
-      for(let i=0;i<pos.count;i++){
-        const v=new THREE.Vector3(pos.getX(i),pos.getY(i),pos.getZ(i));
-        let dev=0.12*Math.sin(v.x*40)*Math.cos(v.z*38);
-        dev+=0.62*Math.exp(-v.distanceTo(hot)*17);
-        dev+=0.18*Math.exp(-v.distanceTo(hot2)*20);
-        dev=Math.abs(dev);
-        const c=this._devColor(dev/maxd); colors.push(c.r,c.g,c.b);
-      }
-      geo.setAttribute('color',new THREE.Float32BufferAttribute(colors,3));
-      const m=new THREE.Mesh(geo,new THREE.MeshStandardMaterial({vertexColors:true,metalness:.1,roughness:.72}));
-      return m;
-    };
-    const grp=new THREE.Group();
-    const plate=new THREE.BoxGeometry(0.42,0.05,0.18,48,8,24); plate.translate(0,0.025,0);
-    const boss=new THREE.CylinderGeometry(0.055,0.06,0.06,44,10); boss.translate(0.02,0.08,0);
-    const pin=new THREE.CylinderGeometry(0.016,0.016,0.07,28,8); pin.translate(0.02,0.135,0);
-    [plate,boss,pin].forEach(g=>grp.add(colorGeo(g)));
-    grp.position.set(-0.02,-0.06,0); // roughly centre on target
-    this.hmScene.add(grp); this.hmMesh=grp;
-    this.heatmapReady=true;
-    }catch(e){ this._hmErr=(e&&e.message)||String(e); console.warn('heatmap init failed:',this._hmErr); }
-  }
-  _devColor(t){ // 0 green -> .5 yellow -> 1 red
-    const THREE=window.THREE; t=Math.max(0,Math.min(1,t));
-    let c=new THREE.Color();
-    if(t<0.5){ c.setRGB(0.2+1.6*t, 0.75, 0.15); } else { c.setRGB(0.9, 0.75-(t-0.5)*1.4, 0.12); }
-    return c;
-  }
-
-  // ---------- view ----------
-  _applyView(){
-    if(!this.ctrl||!this.cam) return;
-    if(this._lastView===this.state.view && this._lastGrid===this.state.gridOn && this._lastPath===this.state.pathOn) return;
-    this._lastView=this.state.view; this._lastGrid=this.state.gridOn; this._lastPath=this.state.pathOn;
-    const tg={x:0.37,y:0.12,z:0};
-    const pos={ iso:[1.5,1.15,1.4], top:[0.37,1.9,0.02], front:[0.37,0.45,1.7], side:[2.0,0.55,0.0] }[this.state.view]||[1.5,1.15,1.4];
-    this.cam.position.set(pos[0],pos[1],pos[2]); this.ctrl.target.set(tg.x,tg.y,tg.z); this.ctrl.update();
-    if(this.grid) this.grid.visible=this.state.gridOn;
-    const showPath = this.state.pathOn && ['plan','pass1','pass2','result'].includes(this.state.stage);
-    if(this.pathLine){ this.pathLine.visible=showPath; }
-    if(this.traceLine){ this.traceLine.visible=this.state.pathOn && ['pass1','pass2','result'].includes(this.state.stage); }
-  }
 
   // ---------- flow ----------
   // ---- flow (order: load CAD -> place -> part ID -> preview -> scan -> result) ----
@@ -1280,28 +823,16 @@ class Component extends DCLogic {
   chooseCad=(part)=>this.setState({matched:part, partId:part.id});
   // STEP 1 -> 2: CAD chosen, move on to placing the part. Default to the first
   // known part if the operator didn't explicitly pick one.
-  cadReady=()=>this.setState({matched:this.state.matched||this.PARTS[0], stage:'place'});
+  cadReady=()=>this.setState({matched:this.state.matched||this.PARTS[0]||null, stage:'place'});
   onFile=(e)=>{
     const f=e.target.files&&e.target.files[0]; if(!f) return;
     const name=f.name;
-    this.setState({matched:{...(this.state.matched||this.PARTS[0]),file:name}});
+    this.setState({matched:{...(this.state.matched||this.PARTS[0]||{}),file:name}});
   };
   // STEP 2 -> 3: part is on the table, go confirm its ID.
   confirmPlaced=()=>this.setState({stage:'identify'});
   onPartInput=(e)=>this.setState({partId:e.target.value});
-  scanId=()=>{ this.setState({partId:(this.state.matched&&this.state.matched.id)||this.PARTS[0].id}); };
-  _loadStl(geo,name){
-    const THREE=window.THREE; geo.computeVertexNormals(); geo.center();
-    geo.computeBoundingBox(); const bb=geo.boundingBox; const size=new THREE.Vector3(); bb.getSize(size);
-    // scale to ~0.4 max
-    const s=0.4/Math.max(size.x,size.y,size.z); geo.scale(s,s,s); geo.computeBoundingBox();
-    while(this.partGroup.children.length) this.partGroup.remove(this.partGroup.children[0]);
-    const mesh=new THREE.Mesh(geo,new THREE.MeshStandardMaterial({color:'#8f97a4',metalness:.6,roughness:.4}));
-    const bb2=geo.boundingBox; const sz=new THREE.Vector3(); bb2.getSize(sz);
-    mesh.position.y=-bb2.min.y; mesh.castShadow=true; mesh.receiveShadow=true; this.partGroup.add(mesh);
-    this.partGroup.position.set(this.px0+sz.x/2,0,this.pz0+sz.z/2);
-    this.partDx=sz.x; this.partDz=sz.z; this.partTopY=sz.y;
-  };
+  scanId=()=>{ this.setState({partId:(this.state.matched&&this.state.matched.id)||(this.PARTS[0]&&this.PARTS[0].id)||''}); };
   // REAL path generation. This is the one step wired to the actual QC Scanner
   // codebase: it POSTs the selected part to the Python backend (backend/server.py),
   // which runs the real planner pipeline (cad_loader -> normal_estimation ->
@@ -1342,9 +873,35 @@ class Component extends DCLogic {
   };
   // STEP 4 -> back to Part ID (preview came from the identify step now).
   backToId=()=>this.setState({stage:'identify',rviz:'idle'});
-  sendToRobot=()=>{ this._scanT=0; this.setState({stage:'pass1',passNum:1,progress:0}); };
-  viewInAnalytics=()=>this.setState({tab:'analytics',aTab:'detail',open3d:'idle'});
-  newPart=()=>{ this._scanT=0; this.setState({stage:'load',partId:this.PARTS[0].id,matched:null,progress:0,result:null,passNum:1,attempts:0,rviz:'idle'}); };
+  // STEP 5: run the scan via the real backend (POST /api/scan/start). The
+  // pipeline is a stub -- scanner capture + QC don't exist yet -- so it returns
+  // an honest 'incomplete' record (persisted to the results store) rather than
+  // a fabricated pass. We show that record on the Result step and refresh the
+  // Analytics list. No fake progress animation.
+  sendToRobot=async ()=>{
+    if(this.state.scanBusy) return;
+    this.setState({scanBusy:true, stage:'pass1', passNum:1, progress:0, scanRec:null});
+    this._log('info','scan','Scan requested for '+(this.state.partId||'(no part)'));
+    try{
+      const r = await (await fetch('/api/scan/start',{method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({partId:this.state.partId, waypointCount:this.waypointCount||0})})).json();
+      if(!r.ok) throw new Error(r.error||'scan could not start');
+      const rec=(r.status&&r.status.record)||null;
+      if(rec){
+        this._log('info','scan','Scan '+rec.scanId+' recorded · status '+rec.status);
+        (rec.notes||[]).forEach(n=>this._log('warn','scan',n));
+      }
+      this.setState({scanBusy:false, stage:'result', scanRec:rec, result:(rec&&rec.result)||null});
+      this._loadScans();
+    }catch(e){
+      this.setState({scanBusy:false, stage:'plan'});
+      this._log('error','scan','Scan failed: '+e);
+      alert('Scan failed:\n'+e);
+    }
+  };
+  viewInAnalytics=()=>this.setState({tab:'analytics',aTab:'dashboard'});
+  newPart=()=>{ this.setState({stage:'load',partId:(this.PARTS[0]&&this.PARTS[0].id)||'',matched:null,progress:0,result:null,passNum:1,attempts:0,rviz:'idle',scanRec:null}); };
 
   // ---------- external visualization launchers ----------
   // Real RViz2 launch via the backend (spawns rviz2 in the host ROS2 env).
@@ -1360,16 +917,56 @@ class Component extends DCLogic {
     }catch(e){ this.setState({rviz:'idle', rvizNote:String(e)}); alert('RViz2 launch error:\n'+e); }
   };
   closeRviz=()=>{ this.setState({rviz:'idle'}); };
-  openOpen3d=()=>{ if(this.state.open3d==='opening'||this.state.open3d==='open')return; this.setState({open3d:'opening'}); clearTimeout(this._o3dT); this._o3dT=setTimeout(()=>this.setState({open3d:'open'}),1500); };
-  closeOpen3d=()=>{ clearTimeout(this._o3dT); this.setState({open3d:'idle'}); };
 
-  // ---------- safety ----------
-  toggleMotors=()=>this.setState(s=>({motorsOn:!s.motorsOn}));
-  toggleDrag=()=>this.setState(s=>({dragMode:!s.dragMode}));
-  home=()=>this.setState({homed:true});
-  toggleSoft=()=>this.setState(s=>({softStop:!s.softStop}));
-  triggerEStop=()=>this.setState({eStop:true,motorsOn:false});
-  clearEStop=()=>this.setState({eStop:false,motorsOn:true});
+  // ---------- motion (drives the physical SR5 via backend /api/robot/*) ----------
+  // One helper for every motion command: POST, merge the returned real status
+  // into the UI, and log the outcome. Never throws to the caller.
+  _motion=async (path, body, action)=>{
+    try{
+      const r = await (await fetch('/api/robot/'+path,{method:'POST',
+        headers:{'Content-Type':'application/json'}, body:JSON.stringify(body||{})})).json();
+      this._applyStatus(r);
+      if(r.ok) this._log('info','arm', action);
+      else this._log('warn','arm', action+' refused — '+(r.error||'unknown'));
+      return r;
+    }catch(e){ this._log('error','arm', action+' failed: '+e); return {ok:false,error:String(e)}; }
+  };
+  toggleMotors=async ()=>{
+    const on=!this.state.motorsOn;
+    await this._motion('power',{on}, on?'Motors energised':'Motors de-energised');
+  };
+  toggleDrag=async ()=>{
+    const on=!this.state.dragMode;
+    await this._motion('drag',{on}, on?'Drag/teach mode enabled':'Drag/teach mode disabled');
+  };
+  home=async ()=>{
+    if(!this.state.connected){ this._log('warn','arm','Home ignored — arm not connected'); return; }
+    if(!window.confirm('Move the arm to the home pose (all six joints to 0°)?\nEnsure the cell is clear.')) return;
+    await this._motion('move',{joints:[0,0,0,0,0,0]}, 'Homing — moving to all-zero joint pose');
+    this.setState({homed:true});
+  };
+  toggleSoft=async ()=>{
+    const on=!this.state.softStop;
+    this.setState({softStop:on});
+    if(on) await this._motion('stop',{}, 'Soft stop — motion halted (motors stay on)');
+    else this._log('info','arm','Soft stop released');
+  };
+  triggerEStop=async ()=>{
+    this.setState({eStop:true});
+    await this._motion('estop',{}, 'EMERGENCY STOP — motion halted, motors de-energised');
+  };
+  clearEStop=async ()=>{
+    await this._motion('clear_alarm',{}, 'Alarm cleared / state recovered');
+    this.setState({eStop:false, softStop:false});
+  };
+  // Jog: send every revolute joint's commanded angle as an absolute move.
+  // Confirmed each time — this drives the real arm. Not a continuous jog.
+  jogToTargets=async ()=>{
+    if(!this.state.connected){ this._log('warn','arm','Jog ignored — arm not connected'); return; }
+    const armJoints=this.state.joints.filter(j=>j.u==='°').slice(0,6).map(j=>+(+j.v).toFixed(2));
+    if(!window.confirm('Jog the arm to the commanded joint angles?\n['+armJoints.join(', ')+'] °\nEnsure the cell is clear.')) return;
+    await this._motion('move',{joints:armJoints}, 'Jog → ['+armJoints.join(', ')+']°');
+  };
 
   goRun=()=>this.setState({tab:'run'});
   goAnalytics=()=>this.setState({tab:'analytics'});
@@ -1385,11 +982,6 @@ class Component extends DCLogic {
   togglePath=()=>this.setState(s=>({pathOn:!s.pathOn}));
 
   // ---------- analytics / debug handlers ----------
-  setADash=()=>this.setState({aTab:'dashboard'});
-  setADetail=()=>this.setState({aTab:'detail'});
-  setAHistory=()=>this.setState({aTab:'history'});
-  openScan=(i)=>this.setState({tab:'analytics',aTab:'detail',selScan:i,open3d:'idle'});
-  setHistPart=(i)=>this.setState({histPart:i});
   setLogFilter=(f)=>this.setState({logFilter:f});
   // Set a joint to an ABSOLUTE commanded value (from the slider or the numeric
   // input), clamped to that joint's [min,max]. Ignores NaN so partially-typed
@@ -1402,95 +994,35 @@ class Component extends DCLogic {
       k===i?{...j,v:+(Math.max(j.min,Math.min(j.max,val)).toFixed(2))}:j)}));
   };
 
-  _resBadge(r){
-    return { pass:{label:'Pass',bg:'#E7F5E8',fg:'#125D1A'}, rescan:{label:'Rescan',bg:'#FEF3C6',fg:'#7B3306'}, flagged:{label:'Flagged',bg:'#FFF1F1',fg:'#A10000'} }[r];
-  }
-
+  // Analytics: real records from the results store (this.SCANS, loaded from
+  // /api/scans). No fabricated charts -- until the QC gate produces metrics,
+  // this is a factual list of what has actually been scanned.
   analyticsVals(){
-    const s=this.state;
-    // No real QC pipeline yet -> no scans -> show an empty state instead of
-    // fabricated dashboards/charts. Guarded early because the detail view
-    // below indexes into SCANS and would crash on an empty dataset.
-    if(!this.SCANS.length){
-      return { hasScans:false, noScans:true,
-        aDash:false, aDetail:false, aHistory:false,
-        setADash:this.setADash, setADetail:this.setADetail, setAHistory:this.setAHistory,
-        dashPill:'', detailPill:'', historyPill:'' };
-    }
-    // subtab pills
-    const pill=(on)=>'padding:0 16px;height:34px;border:1px solid '+(on?'#000':'var(--color-charcoal-200)')+';border-radius:6px;background:'+(on?'#000':'#fff')+';color:'+(on?'#fff':'var(--color-charcoal-700)')+';font-weight:700;font-size:13px;cursor:pointer;font-family:var(--font-sans)';
-    // trend (14 days stacked)
-    const trend=[{p:6,r:1,f:0},{p:7,r:0,f:1},{p:8,r:1,f:0},{p:5,r:1,f:0},{p:9,r:0,f:0},{p:7,r:1,f:1},{p:8,r:0,f:0},{p:6,r:1,f:0},{p:9,r:1,f:0},{p:7,r:0,f:1},{p:8,r:1,f:0},{p:10,r:0,f:0},{p:9,r:1,f:0},{p:8,r:1,f:1}];
-    const maxT=11, chartH=120, baseY=136, sc=chartH/maxT;
-    const trendRects=[];
-    trend.forEach((d,i)=>{
-      const x=16+i*36; let y=baseY;
-      const seg=[[d.p,'#45ae4a'],[d.r,'#f59e0b'],[d.f,'#da1e28']];
-      seg.forEach(([v,c])=>{ if(v>0){ const h=v*sc; y-=h; trendRects.push({x,y:+y.toFixed(1),w:22,h:+h.toFixed(1),fill:c}); } });
+    const scans=this.SCANS||[];
+    const partName=(id)=>{ const p=(this.PARTS||[]).find(x=>x.id===id); return p?p.short:(id||'(unknown part)'); };
+    const badge=(st)=>({
+      incomplete:{bg:'#FEF3C6',fg:'#7B3306',label:'Incomplete'},
+      stopped:{bg:'var(--color-charcoal-100)',fg:'var(--color-charcoal-700)',label:'Stopped'},
+      complete:{bg:'#E7F5E8',fg:'#125D1A',label:'Complete'},
+      error:{bg:'#FFF1F1',fg:'#A10000',label:'Error'},
+    }[st]||{bg:'#FEF3C6',fg:'#7B3306',label:st||'—'});
+    const scansRows=scans.slice().reverse().map(r=>{
+      const b=badge(r.status);
+      return { scanId:r.scanId, part:partName(r.partId),
+        started:(r.startedAt||'—').replace('T',' '),
+        waypoints:(r.waypointCount!=null?r.waypointCount:'—'),
+        status:b.label, badgeBg:b.bg, badgeFg:b.fg };
     });
-    // failure breakdown (30d aggregate)
-    const fails=[['deviation',14],['coverage',9],['density',5],['outliers',3]];
-    const maxF=14;
-    const failBars=fails.map(([k,c])=>({label:this.REASONS[k],count:c,w:Math.round(c/maxF*280),color:{deviation:'#da1e28',coverage:'#f59e0b',density:'#5631ea',outliers:'#62687c'}[k]}));
-    // recent scans
-    const recentScans=this.SCANS.map((sc2,i)=>({scanId:sc2.scanId,part:sc2.part,ts:sc2.ts+' · '+sc2.date,mean:sc2.mean.toFixed(2),coverage:sc2.cov.toFixed(1),res:this._resBadge(sc2.result),click:()=>this.openScan(i)}));
-
-    // ---- detail ----
-    const d=this.SCANS[s.selScan]||this.SCANS[0];
-    const pass=d.result==='pass';
-    // histogram (deviation distribution) — skewed low
-    const histo=[2,6,14,26,38,52,68,54,40,28,18,11,7,4,2,1];
-    const maxH=68, hBase=126, hSc=104/maxH;
-    const histoBars=histo.map((v,i)=>({x:14+i*30,y:+(hBase-v*hSc).toFixed(1),w:22,h:+(v*hSc).toFixed(1),fill: i<10?'#45ae4a':(i<13?'#f59e0b':'#da1e28')}));
-    const histoTolX=14+10*30-4;
-
-    return {
-      hasScans:true, noScans:false,
-      aDash:s.aTab==='dashboard', aDetail:s.aTab==='detail', aHistory:s.aTab==='history',
-      setADash:this.setADash,setADetail:this.setADetail,setAHistory:this.setAHistory,
-      dashPill:pill(s.aTab==='dashboard'),detailPill:pill(s.aTab==='detail'),historyPill:pill(s.aTab==='history'),
-      kpiFirstPass:'87.4', kpiRescan:'11.2', kpiFlagged:'3', kpiCoverage:'97.8',
-      trendRects, failBars, recentScans,
-      // detail
-      dScanId:d.scanId, dPart:d.part, dPartId:d.partId.slice(0,28)+'…', dRes:this._resBadge(d.result),
-      dMean:d.mean.toFixed(2), dRmse:d.rmse.toFixed(2), dStd:d.std.toFixed(2), dCoverage:d.cov.toFixed(1),
-      dTolerance:'±0.50', dPassFail: pass?'Within tolerance':'Out of tolerance',
-      dPassFg: pass?'#125D1A':'#A10000', dPassBg: pass?'#E7F5E8':'#FFF1F1',
-      dPoints:'478,900', dAlign:'TEASER++ global · ICP refine (fitness 0.981)', dDate:d.ts+' · '+d.date,
-      dReasonShow: !pass, dReason: d.reason?this.REASONS[d.reason]:'',
-      histoBars, histoTolX,
-      // external Open3D launcher
-      o3dIdle:s.open3d==='idle', o3dOpening:s.open3d==='opening', o3dOpen:s.open3d==='open',
-      openOpen3d:this.openOpen3d, closeOpen3d:this.closeOpen3d,
-      o3dStatusLabel: s.open3d==='open'?'Window open':(s.open3d==='opening'?'Launching…':'Idle'),
-      o3dStatusBg: s.open3d==='open'?'#E7F5E8':(s.open3d==='opening'?'#EEE7FC':'#F6F7F4'),
-      o3dStatusFg: s.open3d==='open'?'#125D1A':(s.open3d==='opening'?'#5631EA':'var(--color-charcoal-600)'),
-      o3dFile: d.scanId+'_deviation.ply',
-    };
-  }
-
-  historyVals(){
-    const s=this.state;
-    const partBtn=(on)=>'padding:8px 12px;border:1px solid '+(on?'#000':'var(--color-charcoal-200)')+';border-radius:6px;background:'+(on?'#000':'#fff')+';color:'+(on?'#fff':'var(--color-charcoal-700)')+';font-size:11.5px;font-weight:600;cursor:pointer;font-family:var(--font-sans);text-align:left';
-    const histParts=this.PARTS.map((p,i)=>({name:p.short, click:()=>this.setHistPart(i), style:partBtn(s.histPart===i)}));
-    const rows=this.SCANS.filter(x=>x.partIdx===s.histPart).slice().reverse();
-    // trend line of mean
-    const W=520,baseY=136,top=16,maxV=0.9;
-    const n=rows.length;
-    const pts=rows.map((r,i)=>({x:20+(n>1?i/(n-1):0)*(W-40), y:baseY-(r.mean/maxV)*(baseY-top), r}));
-    const histPoints=pts.map(p=>p.x.toFixed(1)+','+p.y.toFixed(1)).join(' ');
-    const histDots=pts.map(p=>({cx:p.x.toFixed(1),cy:p.y.toFixed(1),fill:p.r.result==='pass'?'#45ae4a':(p.r.result==='rescan'?'#f59e0b':'#da1e28')}));
-    const histTolY=(baseY-(0.5/maxV)*(baseY-top)).toFixed(1);
-    const histScans=rows.slice().reverse().map(r=>({scanId:r.scanId,ts:r.ts+' · '+r.date,mean:r.mean.toFixed(2),rmse:r.rmse.toFixed(2),coverage:r.cov.toFixed(1),res:this._resBadge(r.result)}));
-    return { histParts, histPartName:this.PARTS[s.histPart].short, histPoints, histDots, histTolY, histScans, histCount:rows.length };
+    return { hasScans:scans.length>0, noScans:scans.length===0,
+      scanCount:scans.length, scansRows };
   }
 
   debugVals(){
     const s=this.state;
     const joints=s.joints.map((j,i)=>({ n:j.n,
-      // display readouts
+      // display readouts (temperature isn't exposed by the driver -> '—')
       val:j.v.toFixed(j.u==='m'?2:1)+' '+j.u, unit:j.u,
-      vel:(j.vel>=0?'+':'')+j.vel.toFixed(2), tq:j.tq+'%', t:j.t.toFixed(0)+'°C',
+      vel:(j.vel>=0?'+':'')+j.vel.toFixed(2), tq:j.tq+'%', t:(j.t>0?j.t.toFixed(0)+'°C':'—'),
       // slider + numeric-input model: raw numeric value, bounds, and a sensible
       // step (0.01 m for the linear rail, 1 deg for revolute joints).
       raw:+j.v.toFixed(2), min:j.min, max:j.max, step:(j.u==='m'?0.01:1),
@@ -1558,21 +1090,24 @@ class Component extends DCLogic {
         tx:(n.x+13), ly:(n.y+19), sy:(n.y+33), label:n.label, sub:n.sub};
     });
 
+    // Intended ROS2 topics/nodes for the cell. These are NOT live: the ROS2
+    // graph runs inside the qc-humble Docker container and isn't introspected
+    // from this stdlib console backend, so no rates are shown. A grey dot +
+    // '—' rate marks each as "expected, not observed here".
     const ros2=[
-      {name:'/scan_cell/state_machine',kind:'node',dot:'#45ae4a',hz:'—',detail:'lifecycle: active'},
-      {name:'/move_group',kind:'node',dot:'#45ae4a',hz:'—',detail:'MoveIt2 · OMPL'},
-      {name:'/arm_controller/joint_states',kind:'topic',dot:'#45ae4a',hz:'250 Hz',detail:'sensor_msgs/JointState'},
-      {name:'/rail_controller/position',kind:'topic',dot:'#45ae4a',hz:'100 Hz',detail:'std_msgs/Float64'},
-      {name:'/miraco/points',kind:'topic',dot:'#45ae4a',hz:'30 Hz',detail:'sensor_msgs/PointCloud2'},
-      {name:'/miraco/depth',kind:'topic',dot:'#f59e0b',hz:'28 Hz',detail:'1 frame dropped'},
-      {name:'/tf',kind:'topic',dot:'#45ae4a',hz:'200 Hz',detail:'tf2_msgs/TFMessage'},
-      {name:'/qc/registration',kind:'node',dot:'#45ae4a',hz:'—',detail:'TEASER++ · ICP'},
+      {name:'/scan_cell/state_machine',kind:'node',dot:'#c9ced6',hz:'—',detail:'lifecycle state machine'},
+      {name:'/move_group',kind:'node',dot:'#c9ced6',hz:'—',detail:'MoveIt2 · OMPL'},
+      {name:'/arm_controller/joint_states',kind:'topic',dot:'#c9ced6',hz:'—',detail:'sensor_msgs/JointState'},
+      {name:'/rail_controller/position',kind:'topic',dot:'#c9ced6',hz:'—',detail:'std_msgs/Float64'},
+      {name:'/miraco/points',kind:'topic',dot:'#c9ced6',hz:'—',detail:'sensor_msgs/PointCloud2 (scanner TBD)'},
+      {name:'/tf',kind:'topic',dot:'#c9ced6',hz:'—',detail:'tf2_msgs/TFMessage'},
+      {name:'/qc/registration',kind:'node',dot:'#c9ced6',hz:'—',detail:'TEASER++ · ICP (TBD)'},
     ];
     const levelStyle={info:{bg:'#EAF0FF',fg:'#4F5568'},warn:{bg:'#FEF3C6',fg:'#7B3306'},error:{bg:'#FFF1F1',fg:'#A10000'}};
     const logs=s.logs.filter(l=>s.logFilter==='all'||l.l===s.logFilter).map(l=>({t:l.t,src:l.src,m:l.m,lv:l.l.toUpperCase(),lvBg:levelStyle[l.l].bg,lvFg:levelStyle[l.l].fg}));
     const fpill=(on)=>'padding:0 10px;height:26px;border:1px solid '+(on?'#000':'var(--color-charcoal-200)')+';border-radius:5px;background:'+(on?'#000':'#fff')+';color:'+(on?'#fff':'var(--color-charcoal-600)')+';font-size:11px;font-weight:700;cursor:pointer;font-family:var(--font-sans)';
     return {
-      joints, ros2, logs, rosEdges, rosNodes,
+      joints, ros2, logs, rosEdges, rosNodes, jogToTargets:this.jogToTargets,
       logAllPill:fpill(s.logFilter==='all'),logInfoPill:fpill(s.logFilter==='info'),logWarnPill:fpill(s.logFilter==='warn'),logErrorPill:fpill(s.logFilter==='error'),
       setLogAll:()=>this.setLogFilter('all'),setLogInfo:()=>this.setLogFilter('info'),setLogWarn:()=>this.setLogFilter('warn'),setLogError:()=>this.setLogFilter('error'),
     };
@@ -1634,14 +1169,27 @@ class Component extends DCLogic {
       flowStyle='width:360px;flex:none;order:1;display:flex;flex-direction:column;background:#fff;border-right:1px solid var(--color-charcoal-100);min-height:0;';
     }
 
-    // result
-    const rmap={ pass:{kicker:'QC PASS',title:'Within tolerance',desc:'Deviation is within ±0.50 mm across the scanned surface. Result registered to the part record.',bg:'var(--color-green-50)',fg:'var(--color-green-900)',icon:'check-circle'},
-      rescan:{kicker:'RESCANNING',title:'Quality gate failed',desc:'Coverage below threshold. Automatic rescan in progress.',bg:'var(--color-amber-50)',fg:'var(--color-amber-900)',icon:'refresh'},
-      flagged:{kicker:'FLAGGED',title:'Needs human review',desc:'Two scan attempts failed the quality gate. Escalated to a reviewer.',bg:'var(--color-red-50)',fg:'#DA1E28',icon:'alert-triangle'} };
-    const rr=rmap[s.result||'pass'];
+    // ---- result (driven by the real scan record from the backend) ----
+    // The scan pipeline is a stub (no capture/QC), so a completed scan yields
+    // an honest 'incomplete' record. Map the record's real status to the
+    // result panel; only show pass/rescan/flagged once the QC gate exists and
+    // actually sets record.result.
+    const rmap={
+      pass:    {kicker:'QC PASS',   title:'Within tolerance',    desc:'Deviation within tolerance across the scanned surface.', bg:'var(--color-green-50)', fg:'var(--color-green-900)', icon:'check-circle'},
+      rescan:  {kicker:'RESCAN',    title:'Quality gate failed', desc:'Coverage below threshold — rescan recommended.',         bg:'var(--color-amber-50)', fg:'var(--color-amber-900)', icon:'refresh'},
+      flagged: {kicker:'FLAGGED',   title:'Needs human review',  desc:'Scan failed the quality gate and was escalated.',        bg:'var(--color-red-50)',   fg:'#DA1E28',                icon:'alert-triangle'},
+      incomplete:{kicker:'RECORDED · INCOMPLETE', title:'Scan recorded — QC not evaluated',
+                  desc:'The scan was logged to the results store, but scanner capture and the QC quality gate are not implemented yet, so no point cloud or pass/fail was produced.',
+                  bg:'var(--color-amber-50)', fg:'var(--color-amber-900)', icon:'alert-triangle'},
+      stopped: {kicker:'STOPPED',   title:'Scan stopped',        desc:'The scan was stopped by the operator.',                 bg:'var(--color-charcoal-50)', fg:'var(--color-charcoal-700)', icon:'slash'},
+    };
+    const rec=s.scanRec;
+    const recKey = rec ? (rec.result || (rec.status==='stopped'?'stopped':'incomplete')) : (s.result||'incomplete');
+    const rr=rmap[recKey]||rmap.incomplete;
+    const m=(rec&&rec.metrics)||{};
+    const fx=(v,d)=> (v==null?'—':(typeof v==='number'?v.toFixed(d):v));
 
     const progressPct=s.progress;
-    const povPresent=this.pathPts?true:false;
 
     return {
       // tabs
@@ -1674,7 +1222,7 @@ class Component extends DCLogic {
       viewIsoStyle:vbtn(s.view==='iso'),viewTopStyle:vbtn(s.view==='top'),viewFrontStyle:vbtn(s.view==='front'),viewSideStyle:vbtn(s.view==='side'),
       toggleGrid:this.toggleGrid,togglePath:this.togglePath,
       gridBtnStyle:toggleBtn(s.gridOn),pathBtnStyle:toggleBtn(s.pathOn),
-      showCollision:stage==='plan', collisionBg:'var(--color-green-50)',collisionBorder:'var(--color-green-200)',collisionFg:'var(--color-green-900)',collisionIcon:'check-circle',collisionMsg:'No collisions — full surface reachable',
+      showCollision:stage==='plan', collisionBg:'var(--color-charcoal-50)',collisionBorder:'var(--color-charcoal-200)',collisionFg:'var(--color-charcoal-700)',collisionIcon:'alert-triangle',collisionMsg:'Collision + reachability checking runs in RViz/MoveIt — not verified here',
       // stepper
       steps:stepVals,
       // external RViz launcher
@@ -1688,7 +1236,7 @@ class Component extends DCLogic {
       rvizStatusLabel: s.rviz==='open'?'Window open':(s.rviz==='opening'?'Launching…':'Ready'),
       rvizStatusBg: s.rviz==='open'?'#E7F5E8':(s.rviz==='opening'?'#EEE7FC':'#F6F7F4'),
       rvizStatusFg: s.rviz==='open'?'#125D1A':(s.rviz==='opening'?'#5631EA':'var(--color-charcoal-600)'),
-      rvizLiveLine: scanning?('Executing trajectory · waypoint '+Math.round(progressPct/100*(this.waypointCount||66))+' / '+(this.waypointCount||66)):(stage==='result'?'Trajectory playback complete':'Previewing planned toolpath · '+(this.waypointCount||66)+' waypoints'),
+      rvizLiveLine: (this.waypointCount?('planned toolpath · '+this.waypointCount+' waypoints'):'no path planned yet'),
       // stage flags
       stPlace:stage==='place',stIdentify:stage==='identify',stLoad:stage==='load',stPlan:stage==='plan',
       stScanning:scanning,stResult:stage==='result',
@@ -1706,23 +1254,34 @@ class Component extends DCLogic {
       cadChosen:!!s.matched, chosenShort:matched.short||'', chosenFile:matched.file||'', chosenDims:matched.dims||'',
       // load
       partShort:matched.short||'', partFile:matched.file||'', partIdShort:(matched.id||'').slice(0,24)+'…', partDims:matched.dims||'', partTris:matched.tris||'',
-      // plan
-      waypointCount:this.waypointCount||66, estTime:'1 m 40 s',
-      // scanning
-      passLabel:s.passNum===1?'PASS 1 · UP-FACING SURFACES':'PASS 2 · UNDERSIDE',
-      ringDash:(Math.PI*2*52*progressPct/100).toFixed(1)+' '+(Math.PI*2*52).toFixed(1),
-      curWaypoint:Math.round(progressPct/100*(this.waypointCount||66))+' / '+(this.waypointCount||66),
-      pointsCaptured:(Math.round(progressPct/100*482000)).toLocaleString(),
-      liveCoverage:Math.min(99,Math.round(progressPct*0.98)),
-      // result
+      // plan (real numbers from /api/plan; '—' before a path is planned)
+      waypointCount:this.waypointCount||'—',
+      estTime:'—',
+      standoffMm:(this._planStats&&this._planStats.params&&this._planStats.params.standoff_mm)||'—',
+      // path-plan diagnostics (Debug tab) — real /api/plan output or '—'
+      planWaypoints:(this._planStats&&this._planStats.waypointCount)||'—',
+      planLines:(this._planStats&&this._planStats.lineCount)||'—',
+      planSpacing:(this._planStats&&this._planStats.spacingMm!=null)?this._planStats.spacingMm+' mm':'—',
+      planIncidence:(this._planStats&&this._planStats.maxIncidenceDeg!=null)?this._planStats.maxIncidenceDeg+'°':'—',
+      planCad:(this._planStats&&this._planStats.cadFile)||'—',
+      hasPlan:!!this._planStats,
+      // scanning — the stub pipeline captures nothing, so no live capture
+      // figures to show. Kept honest rather than animated.
+      passLabel:'RECORDING SCAN',
+      ringDash:'0 '+(Math.PI*2*52).toFixed(1),
+      curWaypoint:(this.waypointCount||'—')+' planned',
+      pointsCaptured:'—',
+      liveCoverage:'—',
+      // result — from the real scan record (all '—' until QC exists)
       resultKicker:rr.kicker,resultTitle:rr.title,resultDesc:rr.desc,resultBg:rr.bg,resultFg:rr.fg,resultIcon:rr.icon,
-      resMean:'0.18',resRmse:'0.24',resCoverage:'98.4',resAttempts:s.attempts,
+      resMean:fx(m.meanDeviationMm,2),resRmse:fx(m.rmseMm,2),resCoverage:fx(m.coveragePct,1),
+      resAttempts:(rec?0:s.attempts),
       // dock
       motorsDot:s.motorsOn?'var(--color-lime-500)':'#DA1E28', motorsState:s.motorsOn?'motors on':'motors off',
       railPos:s.railPos,
       // button styles
       primaryBtn,secondaryBtn,dockBtn,
-      ...this.analyticsVals(), ...this.historyVals(), ...this.debugVals(),
+      ...this.analyticsVals(), ...this.debugVals(),
     };
   }
 }

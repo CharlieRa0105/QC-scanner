@@ -11,21 +11,24 @@ node uses — one source of truth for talking to the arm:
   * real: `sr5_arm_driver.backends.RokaeArm`  -> xCore SDK (Release/linux/*.so)
   * mock: `sr5_arm_driver.backends.MockArm`   -> pure-Python simulation
 
-This bridge is a thin adapter: it selects real/mock per env, owns the single
-SDK session (the SDK allows only one TCP session to the controller), and
-formats status/telemetry for the HTTP API. It only ever READS — no motion is
-commanded from the console (motion goes through the ROS 2 ArmDriver / teach GUI).
+This bridge is a thin adapter: it selects the backend, owns the single SDK
+session (the SDK allows only one TCP session to the controller), serialises
+access, and formats status/telemetry for the HTTP API.
 
-Mode selection (env QC_ROBOT_MODE = auto | real | mock, default auto):
-  * real  -> RokaeArm only; error if the SDK can't load / arm unreachable
-  * mock  -> MockArm only (safe anywhere, no network)
-  * auto  -> RokaeArm iff the arm pings AND the SDK connects, else MockArm.
-             `kind` in the status always says which actually loaded.
+Motion:
+  The bridge exposes the arm's motion commands (power, drag/teach, jog, stop,
+  clear-alarm) so the operator console can drive the physical SR5 directly.
+  Every motion call is gated on an open connection AND the master motion
+  switch QC_ALLOW_MOTION (default on) -- set it to 0 to make the whole bridge
+  read-only again without touching the UI. Jog moves are absolute joint
+  targets; there is no continuous jog, so a dropped request can't leave the
+  arm driving.
 
 Env:
-  QC_ROBOT_IP   default 192.168.2.160     SR5 address
-  QC_ROBOT_MODE default auto              auto | real | mock
-  QC_SDK_PATH   default ~/rokae_sdk       Linux xCore SDK root (contains Release/linux/)
+  QC_ROBOT_IP     default 192.168.2.160   SR5 address
+  QC_SDK_PATH     default ~/rokae_sdk     Linux xCore SDK root (contains Release/linux/)
+  QC_ALLOW_MOTION default 1               master motion switch (0 => read-only)
+  QC_JOG_SPEED    default 60              default jog end-effector speed, mm/s
 """
 
 import math
@@ -36,8 +39,10 @@ import threading
 from pathlib import Path
 
 DEFAULT_IP = os.environ.get("QC_ROBOT_IP", "192.168.2.160")
-MODE = os.environ.get("QC_ROBOT_MODE", "auto").lower()
 SDK_ROOT = os.environ.get("QC_SDK_PATH") or os.path.expanduser("~/rokae_sdk")
+# Master motion switch. Any value other than 0/false/no leaves motion enabled.
+ALLOW_MOTION = os.environ.get("QC_ALLOW_MOTION", "1").lower() not in ("0", "false", "no", "")
+DEFAULT_JOG_SPEED = float(os.environ.get("QC_JOG_SPEED", "60"))  # mm/s end-effector
 
 # Make the ROS 2 arm-driver package importable (its backends are plain Python).
 _ARM_PKG = Path(__file__).resolve().parent.parent / "ros2_ws" / "src" / "sr5_arm_driver"
@@ -158,6 +163,98 @@ class RobotBridge:
                     "torque": round(tq[i], 3) if i < len(tq) else 0.0,
                 })
             return {"connected": True, "kind": self._kind, "joints": out}
+
+    # ------------------------------------------------------------------
+    # Motion commands (drive the physical SR5).
+    #
+    # Every command runs through _motion_locked(), which enforces the two
+    # safety gates -- master switch + live connection -- before delegating to
+    # the backend, then returns the fresh status dict (with ok/action/error)
+    # so the caller updates its UI from the arm's real state.
+    # ------------------------------------------------------------------
+    def _motion_locked(self, action, fn):
+        """Run motion callable `fn` under the gates, tagging the returned
+        status. Assumes self._lock is held."""
+        if not ALLOW_MOTION:
+            s = self._status_locked()
+            s.update({"ok": False, "action": action,
+                      "error": "motion disabled (QC_ALLOW_MOTION=0)"})
+            return s
+        if not (self._connected and self._arm is not None):
+            s = self._status_locked()
+            s.update({"ok": False, "action": action, "error": "not connected"})
+            return s
+        try:
+            fn(self._arm)
+            self._note = ""
+            s = self._status_locked()
+            s.update({"ok": True, "action": action})
+            return s
+        except Exception as e:  # noqa: BLE001
+            self._note = f"{action} failed: {e}"
+            s = self._status_locked()
+            s.update({"ok": False, "action": action, "error": str(e)})
+            return s
+
+    def set_power(self, on):
+        """Energise (True) or de-energise (False) the motors."""
+        with self._lock:
+            return self._motion_locked("power_on" if on else "power_off",
+                                       lambda arm: arm.set_power(bool(on)))
+
+    def set_drag(self, on):
+        """Enter (True) / leave (False) hand-guiding / teach mode. Entering drag
+        relaxes the motors; leaving it re-energises."""
+        with self._lock:
+            return self._motion_locked("drag_on" if on else "drag_off",
+                                       lambda arm: arm.set_drag(bool(on)))
+
+    def stop(self):
+        """Controlled (soft) stop -- halts motion, motors stay energised."""
+        with self._lock:
+            return self._motion_locked("stop", lambda arm: arm.stop())
+
+    def estop(self):
+        """Emergency stop from the console: soft-stop then cut motor power.
+        NOTE: this is a software stop (SDK stop2) plus power-off, NOT a
+        substitute for the physical E-stop button, which must remain the
+        primary safety device."""
+        with self._lock:
+            def _do(arm):
+                arm.stop()
+                arm.set_power(False)
+            return self._motion_locked("estop", _do)
+
+    def clear_alarm(self):
+        """Recover controller state and clear a servo alarm / released e-stop."""
+        with self._lock:
+            return self._motion_locked("clear_alarm", lambda arm: arm.clear_alarm())
+
+    def move_joints(self, joints_deg, speed_mms=None):
+        """Jog to ABSOLUTE joint targets (degrees, one per revolute joint) at
+        the given end-effector speed (mm/s). A single point-to-point move --
+        not a continuous jog."""
+        speed = float(speed_mms) if speed_mms else DEFAULT_JOG_SPEED
+        try:
+            targets_rad = [math.radians(float(a)) for a in joints_deg]
+        except (TypeError, ValueError) as e:
+            with self._lock:
+                s = self._status_locked()
+                s.update({"ok": False, "action": "move", "error": f"bad joint targets: {e}"})
+                return s
+        with self._lock:
+            if self._arm is not None and len(targets_rad) != getattr(self._arm, "n", len(targets_rad)):
+                s = self._status_locked()
+                s.update({"ok": False, "action": "move",
+                          "error": f"expected {self._arm.n} joint targets, got {len(targets_rad)}"})
+                return s
+            def _do(arm):
+                # RokaeArm.move() reports rejection by returning False (and
+                # stashing the reason in its status) rather than raising, so
+                # turn that into an exception the gate can surface.
+                if not arm.move(targets_rad, speed):
+                    raise RuntimeError(arm.get_status() or "move rejected")
+            return self._motion_locked("move", _do)
 
 
 # Module-level singleton the server shares across requests.

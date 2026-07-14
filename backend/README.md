@@ -44,36 +44,56 @@ Then open <http://127.0.0.1:8000/> in a browser.
 
 ## What is real vs mock
 
-This is the **first** integration slice. Only path generation is real.
+Everything the console shows is now either wired to real code or an honest
+"not implemented yet" state. There is **no fabricated data** in the front-end.
 
 | GUI area | Backed by |
 | --- | --- |
+| **Part catalogue** (Load CAD, recent parts) | **REAL** — `GET /api/parts` lists the actual CAD files in `config/cad/`. A part exists only if its STEP/STL is on disk (and therefore actually plannable). |
 | **Generate scan path** (Load CAD → Preview) | **REAL** — `POST /api/plan` runs `cad_loader → normal_estimation → waypoint_generator → incidence_cone_modifier` and returns the real waypoint count, line count, bbox, mesh stats, incidence, and a decimated waypoint preview. |
-| **Robot connection** (header status dot + IP) | **REAL** — `robot_bridge.py` connects via the **project's arm driver** (`ros2_ws/src/sr5_arm_driver` → `RokaeArm`) on a real xCore SDK session (`/api/robot/connect`, `/api/robot/status`). Falls back to the driver's `MockArm` when the arm is unreachable / SDK unavailable (label shows "Connected · mock"). Offline → honestly shows "Offline". |
-| **Debug joint telemetry** | **REAL** — `/api/robot/joints` streams live `jointPos`/`jointVel`/`jointTorque` from the connected arm (real or mock). The slider/field set a local target; motion command is **not** wired (safety). |
-| **RViz launch** | **REAL** — `/api/rviz/launch` runs the SR5 arm view in the **Humble Docker container** (`qc-humble`), GUI forwarded to the host X display: the exact SR5 model + a joint-slider window (drag to move). No rail / no scan-path overlay yet. Build once with `docker/build.sh`. |
-| Analytics / scan history / heatmap | **Empty state** — no QC results store exists, so it shows "No scan data yet" instead of fabricated dashboards. |
-| Live scan progress, ROS2 graph, logs, Open3D | Mock (front-end) — no MovementDriver / scanner capture / QC engine yet |
+| **Robot connection** (header status dot + IP) | **REAL** — `robot_bridge.py` connects via the project's arm driver (`ros2_ws/src/sr5_arm_driver` → `RokaeArm`) on a real xCore SDK session (`/api/robot/connect`, `/api/robot/status`). No mock: if the arm is unreachable / the SDK can't load, it stays honestly **Offline**. |
+| **Debug joint telemetry** | **REAL** — `/api/robot/joints` streams live `jointPos`/`jointVel`/`jointTorque`. Temperature isn't exposed by the driver → shown as `—`. |
+| **Motion control** (safety bar + Debug "Jog to targets") | **REAL** — power/drag/stop/e-stop/clear-alarm/jog drive the physical SR5 via `/api/robot/{power,drag,stop,estop,clear_alarm,move}`. Jog is an absolute point-to-point move, confirmed each time. Gated on a live connection **and** the `QC_ALLOW_MOTION` master switch. |
+| **RViz launch** | **REAL** — `/api/rviz/launch` runs the SR5 arm view in the **Humble Docker container** (`qc-humble`), GUI forwarded to the host X display. Build once with `docker/build.sh`. |
+| **Scan run** (Preview → Send to robot → Result) | **STUB but wired** — `POST /api/scan/start` records a real scan to the results store. Scanner capture + QC don't exist, so the record is honestly `incomplete` (null metrics, notes naming the missing subsystems). No fabricated pass/fail. |
+| **Analytics** | **REAL (empty)** — reads the results store (`GET /api/scans`); shows recorded scans + an honest "QC metrics not yet computed" banner. No fabricated dashboards/heatmap. |
+| **Debug ROS2 graph / topics** | Reference topology only — labelled "not live" (the ROS2 graph runs in the container, not introspected from this backend). |
 
-### Robot connection (`robot_bridge.py`)
+### Robot connection + motion (`robot_bridge.py`)
 
 The robot-driver code is **taken from the project's ROS 2 arm driver**
-(`ros2_ws/src/sr5_arm_driver`): the bridge wraps its pure-Python backend classes
-(`RokaeArm` real / `MockArm` mock), so the console and the ROS 2 `ArmDriver` node
-share one driver implementation. No `rclpy` needed here — the backends are plain
-Python. Env vars:
+(`ros2_ws/src/sr5_arm_driver` → `RokaeArm`), so the console and the ROS 2
+`ArmDriver` node share one driver implementation. No `rclpy` needed here — the
+backend is plain Python. The bridge owns the single SDK session, serialises
+access, and exposes both reads and motion commands. Env vars:
 
 | Var | Default | Meaning |
 | --- | --- | --- |
-| `QC_ROBOT_MODE` | `auto` | `auto` (real iff arm pings + SDK connects, else mock) / `real` / `mock` |
 | `QC_ROBOT_IP` | `192.168.2.160` | SR5 address |
 | `QC_SDK_PATH` | `~/rokae_sdk` | Linux xCore SDK root (contains `Release/linux/`) |
+| `QC_ALLOW_MOTION` | `1` | Master motion switch. `0` → bridge is read-only (all motion refused). |
+| `QC_JOG_SPEED` | `60` | Default jog end-effector speed, mm/s. |
 
-Endpoints: `GET /api/robot/status`, `GET /api/robot/joints`, `POST /api/robot/connect` `{ip?}`, `POST /api/robot/disconnect`. All read-only w.r.t. motion — motion is driven through the ROS 2 `ArmDriver` / teach GUI, not the console. Note the SDK allows only **one** session, so don't run the console's real connection and the ROS 2 `ArmDriver` against the same arm at once.
+Endpoints:
+- Reads: `GET /api/robot/status`, `GET /api/robot/joints`
+- Session: `POST /api/robot/connect` `{ip?}`, `POST /api/robot/disconnect`
+- Motion: `POST /api/robot/power` `{on}`, `/api/robot/drag` `{on}`, `/api/robot/stop`, `/api/robot/estop`, `/api/robot/clear_alarm`, `/api/robot/move` `{joints:[deg…], speedMms?}`
 
-As those subsystems get built, add endpoints here and wire the matching GUI
-handler (they currently live in the `<script data-dc-script>` block of
-`gui/Scan Cell Console.dc.html`).
+Each motion call returns the fresh status dict tagged `{ok, action, error?}`.
+The console e-stop is a **software** stop (SDK stop2 + power-off), not a
+substitute for the physical E-stop. The SDK allows only **one** session, so
+don't run the console's real connection and the ROS 2 `ArmDriver` against the
+same arm at once. A scan does **not** drive the arm — executing a full toolpath
+is a separate, safety-gated operation (the ROS 2 replay path).
+
+### Scan lifecycle + results store (`scan_pipeline.py`)
+
+`POST /api/scan/start` `{partId, waypointCount?}` runs the scan state machine
+and persists a record to `data/scans.json` (`QC_DATA_DIR` to relocate).
+`GET /api/scan/status`, `GET /api/scans`, `GET /api/scans/{id}`, `POST
+/api/scan/stop`. Scanner capture / registration / QC gate are stubs marked
+`not_implemented`; wire them in `scan_pipeline.py` and the same UI + store keep
+working.
 
 ## `POST /api/plan`
 
@@ -132,7 +152,8 @@ The host no longer needs a ROS2 install. To remove the old `lyrical`:
 
 ## Offline
 
-The GUI is fully offline-capable: React/ReactDOM and THREE (r128) are vendored
-in `gui/vendor/` and preloaded before `support.js` (which then skips its unpkg
-CDN fetch), and the only remote font `@import` (Roboto Mono) is disabled in the
-design-system CSS in favour of the system-monospace fallback.
+The GUI is fully offline-capable: React/ReactDOM are vendored in `gui/vendor/`
+and preloaded before `support.js` (which then skips its unpkg CDN fetch), and
+the only remote font `@import` (Roboto Mono) is disabled in the design-system
+CSS in favour of the system-monospace fallback. (three.js is no longer loaded —
+the in-app 3D scene was retired in favour of the real RViz launcher.)

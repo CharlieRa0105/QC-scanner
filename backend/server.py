@@ -104,9 +104,14 @@ from libs.path_planning.incidence_cone_modifier import apply_incidence_cone_rela
 # only runs under `if __name__ == "__main__"`).
 from plan_path import rotation_matrix_to_quaternion
 
-# Real SR5 connection layer (xCore SDK, real or mock). Lives in this backend
-# dir; robot_bridge.py owns the single connection + serialises SDK access.
+# Real SR5 connection layer (xCore SDK). Lives in this backend dir;
+# robot_bridge.py owns the single connection + serialises SDK access, and
+# exposes the arm's motion commands (power/drag/jog/stop/clear-alarm).
 from robot_bridge import BRIDGE as ROBOT
+
+# Scan lifecycle + results store (stub pipeline: real plumbing, honest empty
+# data until scanner capture / QC exist).
+from scan_pipeline import MANAGER as SCANS
 
 # Planner defaults -- kept in sync with scripts/plan_path.py's argparse
 # defaults and docs/running_the_planner.md. A request's "params" object
@@ -171,6 +176,36 @@ def resolve_cad_file(part_id):
             return p
 
     return None
+
+
+def list_parts():
+    """Enumerate the real CAD files in config/cad/ as the console's part list.
+
+    Replaces the GUI's hard-coded parts: a part exists iff its STEP/STL/etc.
+    is actually on disk and therefore actually plannable. `id` is the file
+    stem (what resolve_cad_file matches + /api/plan expects); `short` is a
+    tidied display name.
+    """
+    parts = []
+    if not CAD_DIR.is_dir():
+        return parts
+    for p in sorted(CAD_DIR.iterdir()):
+        if p.suffix.lower() not in (".step", ".stp", ".stl", ".obj"):
+            continue
+        stem = p.stem
+        # Display name: drop a trailing "_Rev N" and collapse a leading DEX code
+        # + dash into the human part of the name where present.
+        short = stem
+        if " - " in stem:
+            short = stem.split(" - ", 1)[1]
+        short = short.replace("_Rev ", " · Rev ").replace("_", " ").strip()
+        parts.append({
+            "id": stem,
+            "short": short or stem,
+            "file": p.name,
+            "ext": p.suffix.lower().lstrip("."),
+        })
+    return parts
 
 
 def run_plan(part_id, params):
@@ -363,12 +398,31 @@ class QCRequestHandler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         route = self.path.split("?")[0]
-        # ---- robot state (read-only, never commands motion) ----
+        # ---- robot state (read-only reads) ----
         if route == "/api/robot/status":
             self._send_json(200, ROBOT.status())
             return
         if route == "/api/robot/joints":
             self._send_json(200, ROBOT.joints())
+            return
+        # ---- part catalogue (real CAD files on disk) ----
+        if route == "/api/parts":
+            self._send_json(200, {"ok": True, "parts": list_parts()})
+            return
+        # ---- scan lifecycle + results store ----
+        if route == "/api/scan/status":
+            self._send_json(200, SCANS.status())
+            return
+        if route == "/api/scans":
+            self._send_json(200, {"ok": True, "scans": SCANS.store.list()})
+            return
+        if route.startswith("/api/scans/"):
+            scan_id = route[len("/api/scans/"):]
+            rec = SCANS.store.get(scan_id)
+            if rec is None:
+                self._send_json(404, {"ok": False, "error": f"no scan {scan_id}"})
+            else:
+                self._send_json(200, {"ok": True, "scan": rec})
             return
         # "/" -> the console entry point. SimpleHTTPRequestHandler would look
         # for index.html (which doesn't exist); point it at the app file.
@@ -397,6 +451,42 @@ class QCRequestHandler(SimpleHTTPRequestHandler):
             return
         if route == "/api/robot/disconnect":
             self._send_json(200, ROBOT.disconnect())
+            return
+
+        # ---- robot MOTION (drives the physical SR5) ----
+        # Each returns the fresh status dict tagged {ok, action, error?}.
+        if route in ("/api/robot/power", "/api/robot/drag", "/api/robot/stop",
+                     "/api/robot/estop", "/api/robot/clear_alarm", "/api/robot/move"):
+            try:
+                if route == "/api/robot/power":
+                    result = ROBOT.set_power(bool(payload.get("on", True)))
+                elif route == "/api/robot/drag":
+                    result = ROBOT.set_drag(bool(payload.get("on", True)))
+                elif route == "/api/robot/stop":
+                    result = ROBOT.stop()
+                elif route == "/api/robot/estop":
+                    result = ROBOT.estop()
+                elif route == "/api/robot/clear_alarm":
+                    result = ROBOT.clear_alarm()
+                else:  # /api/robot/move
+                    result = ROBOT.move_joints(payload.get("joints", []),
+                                               payload.get("speedMms"))
+                self._send_json(200, result)
+            except Exception as e:  # noqa: BLE001
+                traceback.print_exc()
+                self._send_json(500, {"ok": False, "action": route.rsplit("/", 1)[-1],
+                                      "error": str(e)})
+            return
+
+        # ---- scan lifecycle ----
+        if route == "/api/scan/start":
+            self._send_json(200, SCANS.start(
+                payload.get("partId", ""),
+                waypoint_count=payload.get("waypointCount", 0),
+                plan=payload.get("plan")))
+            return
+        if route == "/api/scan/stop":
+            self._send_json(200, SCANS.stop())
             return
 
         # ---- launch RViz2 (real, host ROS2) ----
@@ -440,10 +530,16 @@ def main():
     args = ap.parse_args()
 
     httpd = HTTPServer((args.host, args.port), QCRequestHandler)
+    base = f"http://{args.host}:{args.port}"
     print(f"QC Scanner console backend serving {GUI_DIR}")
-    print(f"  open  http://{args.host}:{args.port}/")
-    print(f"  plan  POST http://{args.host}:{args.port}/api/plan")
-    print(f"  CAD   {CAD_DIR}")
+    print(f"  open   {base}/")
+    print(f"  parts  GET  {base}/api/parts")
+    print(f"  plan   POST {base}/api/plan")
+    print(f"  robot  GET  {base}/api/robot/status | /api/robot/joints")
+    print(f"  motion POST {base}/api/robot/{{power,drag,stop,estop,clear_alarm,move}}")
+    print(f"  scan   POST {base}/api/scan/start | /api/scan/stop   GET /api/scan/status")
+    print(f"  scans  GET  {base}/api/scans")
+    print(f"  CAD    {CAD_DIR}")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
