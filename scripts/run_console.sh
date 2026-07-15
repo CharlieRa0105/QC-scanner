@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Launch the QC Scanner operator console (backend + GUI).
-# Serves gui/ and the real API (/api/plan, /api/robot/*, /api/scan/*).
+# Serves gui/ and the real API (/api/robot/*, /api/parts, /api/scan/*).
 #
 # IMPORTANT — Python version: the ROKAE xCore SDK ships CPython builds for
 # 3.8-3.12 ONLY. The console must run under one of those or it cannot talk to
-# the arm. This repo keeps a pinned 3.12 env at .venv312 (created with
-#   uv venv --python 3.12 .venv312
-#   uv pip install --python .venv312/bin/python numpy gmsh
-# ). The system python3 here is 3.14, which silently fails to load the SDK
+# the arm. This repo keeps a pinned 3.12 env at .venv312 (created by ./setup.sh
+# with `uv venv --python 3.12 .venv312`). The console backend is stdlib-only, so
+# the venv exists purely to pin that interpreter — there are no pip deps to
+# install. The system python3 here is 3.14, which silently fails to load the SDK
 # (the import falls through to an empty namespace dir) and leaves the arm
 # stuck "Offline" — that was the "mock IP still connected" symptom.
 #

@@ -4,9 +4,8 @@ scan_pipeline.py
 Scan-job lifecycle + results store for the operator console.
 
 Status (2026-07-14):
-    This is a STUB pipeline. The path planner is real (see backend/server.py
-    /api/plan), and the arm connection is real (robot_bridge.py), but the three
-    subsystems a scan actually needs -- scanner capture (MIRACO), point-cloud
+    This is a STUB pipeline. The arm connection is real (robot_bridge.py), but
+    the subsystems a scan actually needs -- scanner capture (MIRACO), point-cloud
     registration, and the QC quality gate -- do not exist in the codebase yet.
 
     So this module does NOT fabricate scan data. It provides the real plumbing
@@ -16,16 +15,14 @@ Status (2026-07-14):
       * a ScanJob     -- the scan lifecycle state machine
       * ScanManager   -- owns the current job + the store, one per process
 
-    A scan run walks the real phases (plan -> execute -> capture -> register ->
-    quality gate) and marks each unbuilt phase honestly. It finishes with a
-    persisted record whose status is "incomplete" and whose metrics are null,
-    with notes naming exactly which subsystems are missing. When those land,
-    fill the phases in and the same UI + store keep working.
+    A scan run walks the real phases (execute -> capture -> register -> quality
+    gate) and marks each unbuilt phase honestly. It finishes with a persisted
+    record whose status is "incomplete" and whose metrics are null, with notes
+    naming exactly which subsystems are missing. When those land, fill the
+    phases in and the same UI + store keep working.
 
-    IMPORTANT: a scan does NOT command arm motion. Driving the physical SR5
-    through a full toolpath is a separate, safety-gated operation (the ROS 2
-    replay path); the console's motion controls (robot_bridge) are for direct
-    operator jogging only.
+    IMPORTANT: a scan does NOT command arm motion. The console's motion controls
+    (robot_bridge) are for direct operator jogging only.
 
 Env:
     QC_DATA_DIR   default <repo>/data     where scans.json is written
@@ -45,7 +42,6 @@ SCANS_FILE = DATA_DIR / "scans.json"
 # until its subsystem exists; the job reports them so the UI can show real
 # progress instead of a fabricated timer.
 PHASES = [
-    {"key": "plan",     "label": "Plan toolpath",       "implemented": True},
     {"key": "execute",  "label": "Execute trajectory",  "implemented": False},
     {"key": "capture",  "label": "Capture point cloud",  "implemented": False},
     {"key": "register", "label": "Register + merge",     "implemented": False},
@@ -129,28 +125,20 @@ class ScanJob:
     immediately with an honest 'incomplete' record rather than pretending to
     work. The phase list still reports which steps ran vs. are unbuilt."""
 
-    def __init__(self, part_id, waypoint_count=0, plan=None):
+    def __init__(self, part_id):
         self.scan_id = _new_scan_id()
         self.part_id = part_id or ""
-        self.waypoint_count = int(waypoint_count or 0)
-        self._plan = plan or {}
         self.started_at = _now_iso()
         self.finished_at = None
         self.state = "running"          # running | done | error | stopped
         self.record = None
 
     def phases(self):
-        # 'plan' counts as done iff we were handed a real plan (waypoints);
-        # everything downstream is not-implemented, hence pending.
+        # Every phase is not-yet-implemented (its subsystem doesn't exist), so
+        # each is reported honestly rather than faked as done.
         out = []
-        planned = self.waypoint_count > 0
         for p in PHASES:
-            if p["key"] == "plan":
-                status = "done" if planned else "skipped"
-            elif not p["implemented"]:
-                status = "not_implemented"
-            else:
-                status = "pending"
+            status = "not_implemented" if not p["implemented"] else "pending"
             out.append({**p, "status": status})
         return out
 
@@ -167,7 +155,6 @@ class ScanJob:
             "finishedAt": self.finished_at,
             "status": "stopped" if state == "stopped" else "incomplete",
             "result": None,               # pass|rescan|flagged once QC exists
-            "waypointCount": self.waypoint_count,
             "metrics": _empty_metrics(),
             "toleranceMm": None,
             "cloudFile": None,
@@ -183,7 +170,6 @@ class ScanJob:
             "scanId": self.scan_id,
             "partId": self.part_id,
             "state": self.state,
-            "waypointCount": self.waypoint_count,
             "startedAt": self.started_at,
             "finishedAt": self.finished_at,
             "phases": self.phases(),
@@ -199,12 +185,12 @@ class ScanManager:
         self._lock = threading.Lock()
         self._job = None
 
-    def start(self, part_id, waypoint_count=0, plan=None):
+    def start(self, part_id):
         with self._lock:
             if self._job is not None and self._job.state == "running":
                 return {"ok": False, "error": "a scan is already running",
                         "status": self._job.status()}
-            job = ScanJob(part_id, waypoint_count, plan)
+            job = ScanJob(part_id)
             # No capture/QC to run, so finalize straight away with an honest,
             # persisted 'incomplete' record instead of a fake progress timer.
             job.finalize(self.store, state="done")

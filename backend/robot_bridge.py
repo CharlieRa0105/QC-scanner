@@ -3,10 +3,9 @@ robot_bridge.py
 
 Connection layer between the operator console and the ROKAE xMate SR5.
 
-The robot-driver code is taken from the project's ROS 2 arm driver package
-(`ros2_ws/src/sr5_arm_driver`): its backend classes are pure-Python (no rclpy),
-so the console reuses the SAME driver implementation that the ROS 2 `ArmDriver`
-node uses — one source of truth for talking to the arm:
+The robot-driver code lives in `backend/sr5_arm_driver/backends.py`: its backend
+classes are pure-Python (no rclpy), giving the console one source of truth for
+talking to the arm:
 
   * `sr5_arm_driver.backends.RokaeArm`  -> xCore SDK (Release/linux/*.so)
 
@@ -67,14 +66,16 @@ SDK_ROOT = _resolve_sdk_root()
 ALLOW_MOTION = os.environ.get("QC_ALLOW_MOTION", "1").lower() not in ("0", "false", "no", "")
 DEFAULT_JOG_SPEED = float(os.environ.get("QC_JOG_SPEED", "60"))  # mm/s end-effector
 
-# Make the ROS 2 arm-driver package importable (its backends are plain Python).
-_ARM_PKG = Path(__file__).resolve().parent.parent / "ros2_ws" / "src" / "sr5_arm_driver"
-if str(_ARM_PKG) not in sys.path:
-    sys.path.insert(0, str(_ARM_PKG))
+# The pure-Python arm backend lives alongside this file in backend/sr5_arm_driver/
+# (imports only math/time -- no rclpy). Make the backend dir importable so the
+# package resolves regardless of how the server is launched.
+_BACKEND_DIR = Path(__file__).resolve().parent
+if str(_BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_DIR))
 from sr5_arm_driver.backends import RokaeArm  # noqa: E402  (project driver code)
 
 # SR5 joint labels for the UI (6 revolute joints; the rail is a separate axis,
-# driven by the RailDriver in ros2_ws/src/rail_driver).
+# not commanded from this console).
 JOINT_NAMES = ["J1 · base", "J2 · shoulder", "J3 · elbow",
                "J4 · wrist 1", "J5 · wrist 2", "J6 · wrist 3"]
 

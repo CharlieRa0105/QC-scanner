@@ -9,9 +9,7 @@
      These MUST load before support.js. The dc-runtime's loadReactUmd()
      short-circuits when window.React/window.ReactDOM already exist, so
      pre-loading them here means it never reaches out to unpkg.
-     Vendored 2026-07-13 so the shop-floor console runs without internet.
-     (The 3D cell view was retired in favour of the real RViz launcher, so
-     three.js / OrbitControls / STLLoader are no longer loaded.)
+     Vendored so the shop-floor console runs without internet.
      ============================================================ -->
 <script src="./vendor/react.production.min.js"></script>
 <script src="./vendor/react-dom.production.min.js"></script>
@@ -122,17 +120,6 @@
     <sc-if value="{{ isRun }}" hint-placeholder-val="{{ true }}">
       <div style="{{ runRootStyle }}">
 
-        <!-- VIEWPORT → embedded scan-path visualiser (gui/scanpath-visualizer).
-             A self-contained three.js viewer that previews the toolpath on the
-             Rokae SR5 cell. Served from the same origin by backend/server.py.
-             When the operator generates a path (generatePath → /api/plan), the
-             console posts the ScanPath straight into this iframe (see
-             _pushScanpath), so the part + path appear here automatically. -->
-        <div style="{{ vpStyle }}">
-          <iframe id="scanViewer" src="scanpath-visualizer/index.html" title="Scan path visualiser"
-                  style="position:absolute;inset:0;width:100%;height:100%;border:0;display:block;background:#0a0e13"></iframe>
-        </div>
-
         <!-- FLOW PANEL -->
         <div style="{{ flowStyle }}">
           <!-- stepper -->
@@ -174,7 +161,7 @@
                 <div>
                   <div style="font-size:12px;font-weight:700;letter-spacing:.04em;color:var(--color-blue-500);margin-bottom:6px">STEP 3</div>
                   <h2 class="ds" style="font-size:26px">Confirm the part ID</h2>
-                  <p class="ds" style="color:var(--color-charcoal-600);margin-top:8px;font-size:15px">Scan the barcode or type the Dexory part number to confirm the placed part matches the loaded CAD, then generate the scan path.</p>
+                  <p class="ds" style="color:var(--color-charcoal-600);margin-top:8px;font-size:15px">Scan the barcode or type the Dexory part number to confirm the placed part matches the reference model, then start the scan.</p>
                 </div>
                 <div style="border:1px solid var(--color-charcoal-100);background:#fff;border-radius:6px;padding:10px 12px;display:flex;align-items:center;gap:10px">
                   <svg width="16" height="16" fill="none" stroke="var(--color-charcoal-500)" stroke-width="2" style="flex:none"><use href="assets/icons.svg#file"/></svg>
@@ -189,8 +176,8 @@
                     </button>
                   </div>
                 </div>
-                <button onClick="{{ generatePath }}" style="{{ primaryBtn }}">Confirm &amp; generate scan path
-                  <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><use href="assets/icons.svg#chevron-right"/></svg>
+                <button onClick="{{ sendToRobot }}" style="{{ primaryBtn }}">Confirm &amp; start scan
+                  <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><use href="assets/icons.svg#lightning"/></svg>
                 </button>
               </div>
             </sc-if>
@@ -201,7 +188,7 @@
                 <div>
                   <div style="font-size:12px;font-weight:700;letter-spacing:.04em;color:var(--color-blue-500);margin-bottom:6px">STEP 1</div>
                   <h2 class="ds" style="font-size:26px">Load the CAD model</h2>
-                  <p class="ds" style="color:var(--color-charcoal-600);margin-top:8px;font-size:15px">Pick the part's CAD from the library or load a file. This is the reference model the scan path is generated from.</p>
+                  <p class="ds" style="color:var(--color-charcoal-600);margin-top:8px;font-size:15px">Pick the part's CAD from the library or load a file. This is the reference model the scan is inspected against.</p>
                 </div>
                 <div style="display:flex;flex-direction:column;gap:8px">
                   <div style="font-size:11px;font-weight:600;color:var(--color-charcoal-500)">Part library</div>
@@ -232,33 +219,6 @@
                 <button onClick="{{ cadReady }}" style="{{ primaryBtn }}">Continue
                   <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><use href="assets/icons.svg#chevron-right"/></svg>
                 </button>
-              </div>
-            </sc-if>
-
-            <!-- PLAN / PREVIEW -->
-            <sc-if value="{{ stPlan }}" hint-placeholder-val="{{ false }}">
-              <div style="display:flex;flex-direction:column;gap:16px">
-                <div>
-                  <div style="font-size:12px;font-weight:700;letter-spacing:.04em;color:var(--color-blue-500);margin-bottom:6px">STEP 4 · PREVIEW</div>
-                  <h2 class="ds" style="font-size:24px">Review the scan path</h2>
-                  <p class="ds" style="color:var(--color-charcoal-600);margin-top:8px;font-size:14px">Toolpath generated from the CAD surface. Check the preview in the viewport for reachability and collisions before running.</p>
-                </div>
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-                  <div style="border:1px solid var(--color-charcoal-100);background:#fff;padding:12px"><div style="font-size:11px;color:var(--color-charcoal-500)">Passes</div><div style="font-family:var(--font-mono);font-size:18px;font-weight:700;margin-top:2px">2</div><div style="font-size:10px;color:var(--color-charcoal-500)">two separate scans</div></div>
-                  <div style="border:1px solid var(--color-charcoal-100);background:#fff;padding:12px"><div style="font-size:11px;color:var(--color-charcoal-500)">Waypoints</div><div style="font-family:var(--font-mono);font-size:18px;font-weight:700;margin-top:2px">{{ waypointCount }}</div><div style="font-size:10px;color:var(--color-charcoal-500)">per pass</div></div>
-                  <div style="border:1px solid var(--color-charcoal-100);background:#fff;padding:12px"><div style="font-size:11px;color:var(--color-charcoal-500)">Est. scan time</div><div style="font-family:var(--font-mono);font-size:18px;font-weight:700;margin-top:2px">{{ estTime }}</div><div style="font-size:10px;color:var(--color-charcoal-500)">both passes</div></div>
-                  <div style="border:1px solid var(--color-charcoal-100);background:#fff;padding:12px"><div style="font-size:11px;color:var(--color-charcoal-500)">Standoff</div><div style="font-family:var(--font-mono);font-size:18px;font-weight:700;margin-top:2px">{{ standoffMm }}<span style="font-size:11px"> mm</span></div><div style="font-size:10px;color:var(--color-charcoal-500)">scanner offset</div></div>
-                </div>
-                <div style="display:flex;align-items:center;gap:10px;padding:12px 14px;background:var(--color-charcoal-50);border:1px solid var(--color-charcoal-200)">
-                  <svg width="18" height="18" fill="none" stroke="var(--color-charcoal-600)" stroke-width="2"><use href="assets/icons.svg#alert-triangle"/></svg>
-                  <span style="font-size:13px;font-weight:600;color:var(--color-charcoal-700)">Collision &amp; reachability checking runs in RViz/MoveIt — not verified in this console</span>
-                </div>
-                <div style="display:flex;gap:10px">
-                  <button onClick="{{ backToId }}" style="{{ secondaryBtn }}">Back</button>
-                  <button onClick="{{ sendToRobot }}" style="{{ primaryBtn }}">Send to robot
-                    <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><use href="assets/icons.svg#lightning"/></svg>
-                  </button>
-                </div>
               </div>
             </sc-if>
 
@@ -371,15 +331,14 @@
           <sc-if value="{{ hasScans }}" hint-placeholder-val="{{ false }}">
             <div style="border:1px solid var(--color-charcoal-100);background:#fff">
               <div style="padding:14px 18px;border-bottom:1px solid var(--color-charcoal-100);font-weight:700;font-size:15px;display:flex;align-items:center;gap:8px">Recorded scans<span style="font-family:var(--font-mono);font-size:12px;color:var(--color-charcoal-500);font-weight:400">{{ scanCount }} total</span></div>
-              <div style="display:grid;grid-template-columns:170px 1fr 160px 110px 96px;gap:0;padding:10px 18px;font-size:11px;font-weight:700;color:var(--color-charcoal-500);border-bottom:1px solid var(--color-charcoal-100);letter-spacing:.02em">
-                <span>SCAN ID</span><span>PART</span><span>STARTED</span><span style="text-align:right">WAYPOINTS</span><span style="text-align:right">STATUS</span>
+              <div style="display:grid;grid-template-columns:190px 1fr 180px 110px;gap:0;padding:10px 18px;font-size:11px;font-weight:700;color:var(--color-charcoal-500);border-bottom:1px solid var(--color-charcoal-100);letter-spacing:.02em">
+                <span>SCAN ID</span><span>PART</span><span>STARTED</span><span style="text-align:right">STATUS</span>
               </div>
               <sc-for list="{{ scansRows }}" as="r" hint-placeholder-count="6">
-                <div style="display:grid;grid-template-columns:170px 1fr 160px 110px 96px;gap:0;padding:12px 18px;align-items:center;border-bottom:1px solid var(--color-charcoal-100)">
+                <div style="display:grid;grid-template-columns:190px 1fr 180px 110px;gap:0;padding:12px 18px;align-items:center;border-bottom:1px solid var(--color-charcoal-100)">
                   <span style="font-family:var(--font-mono);font-size:12px;font-weight:600">{{ r.scanId }}</span>
                   <span style="font-size:13px;color:var(--color-charcoal-700)">{{ r.part }}</span>
                   <span style="font-family:var(--font-mono);font-size:11px;color:var(--color-charcoal-500)">{{ r.started }}</span>
-                  <span style="font-family:var(--font-mono);font-size:13px;text-align:right">{{ r.waypoints }}</span>
                   <span style="display:flex;justify-content:flex-end"><span style="display:inline-flex;align-items:center;gap:5px;background:{{ r.badgeBg }};color:{{ r.badgeFg }};padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700"><span style="width:5px;height:5px;border-radius:50%;background:{{ r.badgeFg }}"></span>{{ r.status }}</span></span>
                 </div>
               </sc-for>
@@ -395,7 +354,6 @@
         <div style="max-width:1280px;margin:0 auto;display:flex;flex-direction:column;gap:16px">
           <div style="display:flex;align-items:center;gap:10px">
             <h1 class="ds" style="font-size:22px">Debug &amp; diagnostics</h1>
-            <span style="font-size:11px;font-family:var(--font-mono);color:var(--color-charcoal-500);background:var(--color-charcoal-100);padding:2px 8px;border-radius:4px">ROS2 Humble · MoveIt2</span>
           </div>
 
           <!-- joint states -->
@@ -427,84 +385,6 @@
                 <span style="font-family:var(--font-mono);font-size:12px;text-align:right;color:var(--color-charcoal-500)">{{ j.t }}</span>
               </div>
             </sc-for>
-          </div>
-
-          <!-- ROS2 network graph (visualiser) -->
-          <div style="border:1px solid var(--color-charcoal-100);background:#fff">
-            <div style="padding:12px 16px;border-bottom:1px solid var(--color-charcoal-100);display:flex;align-items:center;gap:10px">
-              <span style="font-weight:700;font-size:14px">ROS2 network</span>
-              <span style="font-size:11px;font-family:var(--font-mono);color:var(--color-charcoal-500)">reference topology · not live</span>
-              <span style="margin-left:auto;display:flex;align-items:center;gap:14px;font-size:10.5px;color:var(--color-charcoal-600)">
-                <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:14px;height:3px;border-radius:2px;background:#5631ea"></span>command</span>
-                <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:14px;height:3px;border-radius:2px;background:#0f62fe"></span>motion</span>
-                <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:14px;height:3px;border-radius:2px;background:#45ae4a"></span>feedback</span>
-                <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:14px;height:3px;border-radius:2px;background:#62687c"></span>mission</span>
-              </span>
-            </div>
-            <div style="padding:8px 12px">
-              <svg viewBox="0 0 620 320" style="width:100%;height:auto;display:block" preserveAspectRatio="xMidYMid meet">
-                <defs>
-                  <marker id="rosArr-cmd" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L6,3 L0,6 Z" fill="#5631ea"/></marker>
-                  <marker id="rosArr-motion" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L6,3 L0,6 Z" fill="#0f62fe"/></marker>
-                  <marker id="rosArr-fb" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L6,3 L0,6 Z" fill="#45ae4a"/></marker>
-                  <marker id="rosArr-misc" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L6,3 L0,6 Z" fill="#62687c"/></marker>
-                </defs>
-                <!-- edges (topics) -->
-                <sc-for list="{{ rosEdges }}" as="e" hint-placeholder-count="11">
-                  <path d="{{ e.path }}" fill="none" stroke="{{ e.color }}" stroke-width="1.6" marker-end="{{ e.marker }}" opacity="0.9"></path>
-                </sc-for>
-                <sc-for list="{{ rosEdges }}" as="e" hint-placeholder-count="11">
-                  <text x="{{ e.lx }}" y="{{ e.ly }}" text-anchor="middle" style="font-family:var(--font-mono);font-size:9px;fill:{{ e.color }};paint-order:stroke;stroke:#fff;stroke-width:3px;stroke-linejoin:round">{{ e.label }}</text>
-                </sc-for>
-                <!-- nodes -->
-                <sc-for list="{{ rosNodes }}" as="n" hint-placeholder-count="7">
-                  <g>
-                    <rect x="{{ n.x }}" y="{{ n.y }}" width="{{ n.w }}" height="{{ n.h }}" rx="7" fill="#fff" stroke="var(--color-charcoal-200)" stroke-width="1.2"></rect>
-                    <rect x="{{ n.x }}" y="{{ n.y }}" width="4" height="{{ n.h }}" rx="2" fill="{{ n.accent }}"></rect>
-                    <text x="{{ n.tx }}" y="{{ n.ly }}" style="font-family:var(--font-sans);font-size:12px;font-weight:700;fill:#000">{{ n.label }}</text>
-                    <text x="{{ n.tx }}" y="{{ n.sy }}" style="font-family:var(--font-mono);font-size:9.5px;fill:var(--color-charcoal-500)">{{ n.sub }}</text>
-                  </g>
-                </sc-for>
-              </svg>
-            </div>
-          </div>
-
-          <!-- two columns: ros2 + moveit -->
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start">
-            <div style="border:1px solid var(--color-charcoal-100);background:#fff">
-              <div style="padding:12px 16px;border-bottom:1px solid var(--color-charcoal-100);display:flex;align-items:center;gap:8px">
-                <span style="font-weight:700;font-size:14px">ROS2 nodes &amp; topics</span>
-                <span style="margin-left:auto;display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--color-charcoal-500);font-weight:700"><span style="width:6px;height:6px;border-radius:50%;background:#c9ced6"></span>expected · not introspected</span>
-              </div>
-              <sc-for list="{{ ros2 }}" as="n" hint-placeholder-count="8">
-                <div style="display:flex;align-items:center;gap:10px;padding:9px 16px;border-bottom:1px solid var(--color-charcoal-100)">
-                  <span style="width:8px;height:8px;border-radius:50%;background:{{ n.dot }};flex:none"></span>
-                  <span style="font-size:8px;font-weight:700;letter-spacing:.06em;color:var(--color-charcoal-500);width:38px;flex:none">{{ n.kind }}</span>
-                  <div style="min-width:0;flex:1">
-                    <div style="font-family:var(--font-mono);font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ n.name }}</div>
-                    <div style="font-size:10.5px;color:var(--color-charcoal-500)">{{ n.detail }}</div>
-                  </div>
-                  <span style="font-family:var(--font-mono);font-size:11px;color:var(--color-charcoal-600);flex:none">{{ n.hz }}</span>
-                </div>
-              </sc-for>
-            </div>
-
-            <div style="border:1px solid var(--color-charcoal-100);background:#fff">
-              <div style="padding:12px 16px;border-bottom:1px solid var(--color-charcoal-100);font-weight:700;font-size:14px">Path plan · last run</div>
-              <div style="padding:16px;display:flex;flex-direction:column;gap:12px">
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-                  <div><div style="font-size:11px;color:var(--color-charcoal-500)">Waypoints</div><div style="font-family:var(--font-mono);font-size:13px;font-weight:600">{{ planWaypoints }}</div></div>
-                  <div><div style="font-size:11px;color:var(--color-charcoal-500)">Raster lines</div><div style="font-family:var(--font-mono);font-size:13px;font-weight:600">{{ planLines }}</div></div>
-                  <div><div style="font-size:11px;color:var(--color-charcoal-500)">Raster spacing</div><div style="font-family:var(--font-mono);font-size:13px;font-weight:600">{{ planSpacing }}</div></div>
-                  <div><div style="font-size:11px;color:var(--color-charcoal-500)">Max incidence</div><div style="font-family:var(--font-mono);font-size:13px;font-weight:600">{{ planIncidence }}</div></div>
-                </div>
-                <div style="font-size:11px;color:var(--color-charcoal-500)">CAD source</div>
-                <div style="font-family:var(--font-mono);font-size:12px;font-weight:600;margin-top:-8px;word-break:break-all">{{ planCad }}</div>
-                <div style="border-top:1px solid var(--color-charcoal-100);padding-top:12px;font-size:11.5px;color:var(--color-charcoal-500);line-height:1.5">
-                  From the coverage-path planner (<span style="font-family:var(--font-mono)">/api/plan</span>). MoveIt2 trajectory planning + collision checking run in the qc-humble container and aren't reported here yet.
-                </div>
-              </div>
-            </div>
           </div>
 
           <!-- log stream -->
@@ -590,13 +470,10 @@ class Component extends DCLogic {
       partId:'', matched:null,
       progress:0, passNum:1, attempts:0, result:null,
       scanRec:null, scanBusy:false,     // real scan record + in-flight flag
-      view:'iso', gridOn:true, pathOn:true, povOn:true,
-      planning:false, planError:null,   // real /api/plan call status (see generatePath)
       clock:'',
       railPos:'—',
       aTab:'dashboard', selScan:0, histPart:0,
       joints:JOINTS0, logs:LOGS0, logFilter:'all',
-      rviz:'idle',
     };
     this._logSeq=1;
   }
@@ -618,11 +495,6 @@ class Component extends DCLogic {
     // Load the real part catalogue + recorded scans from the backend.
     this._loadParts();
     this._loadScans();
-    // The embedded scan-path viewer announces itself once its scripts boot; when
-    // it does, (re)send the current path so a path generated before the iframe
-    // finished loading — or after a viewer reload — still shows up.
-    this._onViewerMsg=(e)=>{ if(e&&e.data&&e.data.type==='qc:viewer-ready') this._pushScanpath(); };
-    window.addEventListener('message', this._onViewerMsg);
   }
 
   // ---------- real part catalogue (backend /api/parts) ----------
@@ -736,7 +608,6 @@ class Component extends DCLogic {
     clearInterval(this._statusTick);
     clearInterval(this._jointTick);
     clearTimeout(this._ipT);
-    if(this._onViewerMsg) window.removeEventListener('message', this._onViewerMsg);
   }
   componentDidUpdate(){}
 
@@ -756,51 +627,7 @@ class Component extends DCLogic {
   confirmPlaced=()=>this.setState({stage:'identify'});
   onPartInput=(e)=>this.setState({partId:e.target.value});
   scanId=()=>{ this.setState({partId:(this.state.matched&&this.state.matched.id)||(this.PARTS[0]&&this.PARTS[0].id)||''}); };
-  // REAL path generation. This is the one step wired to the actual QC Scanner
-  // codebase: it POSTs the selected part to the Python backend (backend/server.py),
-  // which runs the real planner pipeline (cad_loader -> normal_estimation ->
-  // waypoint_generator -> incidence_cone_modifier) on the part's STEP file and
-  // returns real waypoint data. Everything else in this console is still mock.
-  // On success we advance to the 'plan' stage with the REAL waypoint count; on
-  // failure we stay on 'load' and surface the reason (e.g. no CAD file for a
-  // part that only exists as mock data).
-  generatePath=async ()=>{
-    if(this.state.planning) return;                       // ignore double-clicks while in flight
-    this.setState({planning:true, planError:null});
-    const part = this.state.matched || {};
-    const partId = part.id || this.state.partId || '';
-    try {
-      const res = await fetch('/api/plan', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        // params:{} lets the backend use its documented defaults (standoff,
-        // fov, overlap, max-incidence, ...). Override keys here later to expose
-        // those knobs in the UI.
-        body: JSON.stringify({ partId, params:{} }),
-      });
-      const data = await res.json();
-      if(!res.ok || !data.ok) throw new Error(data.error || ('HTTP '+res.status));
-      // Real numbers from the planner replace the previous hard-coded 66.
-      this.waypointCount = data.waypointCount;
-      this._planStats = data;   // {waypointCount, lineCount, bbox, maxIncidenceDeg, spacingMm, ...}
-      // Full ScanPath (positions + targets, mm) for the embedded visualiser.
-      this._lastScanpath = data.scanpath || null;
-      this.setState({planning:false, stage:'plan', rviz:'idle'});
-      // Pull the part + path up in the embedded viewer automatically.
-      this._pushScanpath();
-    } catch(e){
-      const msg = (e && e.message) ? e.message : String(e);
-      this.setState({planning:false, planError:msg});
-      console.error('[qc] /api/plan failed:', e);
-      // Prototype-level surfacing: the Part ID panel has no error slot yet, so
-      // an alert keeps the failure honest and visible instead of silently
-      // stalling.
-      alert('Path planning failed:\n'+msg);
-    }
-  };
-  // STEP 4 -> back to Part ID (preview came from the identify step now).
-  backToId=()=>this.setState({stage:'identify',rviz:'idle'});
-  // STEP 5: run the scan via the real backend (POST /api/scan/start). The
+  // Run the scan via the real backend (POST /api/scan/start). The
   // pipeline is a stub -- scanner capture + QC don't exist yet -- so it returns
   // an honest 'incomplete' record (persisted to the results store) rather than
   // a fabricated pass. We show that record on the Result step and refresh the
@@ -812,7 +639,7 @@ class Component extends DCLogic {
     try{
       const r = await (await fetch('/api/scan/start',{method:'POST',
         headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({partId:this.state.partId, waypointCount:this.waypointCount||0})})).json();
+        body: JSON.stringify({partId:this.state.partId})})).json();
       if(!r.ok) throw new Error(r.error||'scan could not start');
       const rec=(r.status&&r.status.record)||null;
       if(rec){
@@ -822,42 +649,13 @@ class Component extends DCLogic {
       this.setState({scanBusy:false, stage:'result', scanRec:rec, result:(rec&&rec.result)||null});
       this._loadScans();
     }catch(e){
-      this.setState({scanBusy:false, stage:'plan'});
+      this.setState({scanBusy:false, stage:'identify'});
       this._log('error','scan','Scan failed: '+e);
       alert('Scan failed:\n'+e);
     }
   };
   viewInAnalytics=()=>this.setState({tab:'analytics',aTab:'dashboard'});
-  newPart=()=>{ this.setState({stage:'load',partId:(this.PARTS[0]&&this.PARTS[0].id)||'',matched:null,progress:0,result:null,passNum:1,attempts:0,rviz:'idle',scanRec:null}); };
-
-  // ---------- embedded scan-path visualiser ----------
-  // Push the last generated ScanPath into the embedded viewer iframe. Called
-  // after generatePath, and again whenever the iframe reports it has (re)loaded
-  // ('qc:viewer-ready'), so a path generated before the viewer finished booting
-  // still gets delivered. Same-origin iframe, so postMessage is direct.
-  _pushScanpath=()=>{
-    const sp=this._lastScanpath; if(!sp) return;
-    const ifr=document.getElementById('scanViewer');
-    if(ifr&&ifr.contentWindow){
-      ifr.contentWindow.postMessage(
-        {type:'qc:scanpath', scanpath:sp, name:(this.state.partId||'generated path')}, '*');
-    }
-  };
-
-  // ---------- external visualization launchers ----------
-  // Real RViz2 launch via the backend (spawns rviz2 in the host ROS2 env).
-  // Honest about the fact that the SR5 model + path aren't loaded yet.
-  openRviz=async ()=>{
-    if(this.state.rviz==='opening'||this.state.rviz==='open') return;
-    this.setState({rviz:'opening', rvizNote:''});
-    try{
-      const r = await (await fetch('/api/rviz/launch',{method:'POST'})).json();
-      if(r.launched){ this.setState({rviz:'open', rvizNote:r.note||''}); }
-      else { this.setState({rviz:'idle', rvizNote:r.reason||'launch failed'});
-             alert('RViz2 could not launch:\n'+(r.reason||'unknown')); }
-    }catch(e){ this.setState({rviz:'idle', rvizNote:String(e)}); alert('RViz2 launch error:\n'+e); }
-  };
-  closeRviz=()=>{ this.setState({rviz:'idle'}); };
+  newPart=()=>{ this.setState({stage:'load',partId:(this.PARTS[0]&&this.PARTS[0].id)||'',matched:null,progress:0,result:null,passNum:1,attempts:0,scanRec:null}); };
 
   // ---------- motion (drives the physical SR5 via backend /api/robot/*) ----------
   // One helper for every motion command: POST, merge the returned real status
@@ -914,14 +712,6 @@ class Component extends DCLogic {
   goDebug=()=>this.setState({tab:'debug'});
   setIp=(e)=>{ this.setState({ip:e.target.value}); this._reconnectSoon(); };
 
-  viewIso=()=>this.setState({view:'iso'});
-  viewTop=()=>this.setState({view:'top'});
-  viewFront=()=>this.setState({view:'front'});
-  viewSide=()=>this.setState({view:'side'});
-  resetView=()=>this.setState({view:'iso'});
-  toggleGrid=()=>this.setState(s=>({gridOn:!s.gridOn}));
-  togglePath=()=>this.setState(s=>({pathOn:!s.pathOn}));
-
   // ---------- analytics / debug handlers ----------
   setLogFilter=(f)=>this.setState({logFilter:f});
   // Set a joint to an ABSOLUTE commanded value (from the slider or the numeric
@@ -951,7 +741,6 @@ class Component extends DCLogic {
       const b=badge(r.status);
       return { scanId:r.scanId, part:partName(r.partId),
         started:(r.startedAt||'—').replace('T',' '),
-        waypoints:(r.waypointCount!=null?r.waypointCount:'—'),
         status:b.label, badgeBg:b.bg, badgeFg:b.fg };
     });
     return { hasScans:scans.length>0, noScans:scans.length===0,
@@ -973,82 +762,11 @@ class Component extends DCLogic {
       setInput:(e)=>this.setJoint(i, parseFloat(e.target.value)),
       tqColor:j.tq>75?'#da1e28':j.tq>50?'#f59e0b':'var(--color-charcoal-400)' }));
 
-    // ---- ROS2 network graph (topology from docs/ros2_node_graph.md) ----
-    // A visual node-graph of the control-side ROS2 network: nodes are boxes,
-    // topics are directed, labelled, colour-coded edges (command / motion /
-    // feedback / mission). Everything is computed here (positions, quadratic
-    // edge paths, label points) and rendered as plain SVG primitives in the
-    // template via two sc-for loops -- mirroring how the analytics charts draw.
-    const NW=126, NH=42;
-    const NODE={
-      TM:{x:24, y:150, label:'TaskManager',    sub:'mission'},
-      PP:{x:247,y:64,  label:'PathPlanner',    sub:'planning'},
-      MD:{x:247,y:236, label:'MovementDriver', sub:'motion'},
-      SD:{x:470,y:28,  label:'ScannerDriver',  sub:'MIRACO+'},
-      AD:{x:470,y:150, label:'ArmDriver',      sub:'SR5'},
-      RD:{x:470,y:262, label:'RailDriver',     sub:'rail'},
-      PR:{x:24, y:262, label:'Processing',     sub:'QC · cloud'},
-    };
-    const ctr=(k)=>({x:NODE[k].x+NW/2, y:NODE[k].y+NH/2});
-    const EDGE_COL={cmd:'#5631ea', motion:'#0f62fe', fb:'#45ae4a', misc:'#62687c'};
-    // [from, to, topic label, kind, bow]  bow = perpendicular offset so that a
-    // command edge and its feedback counterpart bow to opposite sides instead
-    // of overlapping.
-    const EDGE_DEFS=[
-      ['TM','PP','CAD','cmd',16],
-      ['TM','SD','setScanner','cmd',0],
-      ['PP','MD','nextWaypoint','motion',22],
-      ['MD','AD','armCMD','motion',12],
-      ['MD','RD','railCMD','motion',12],
-      ['AD','MD','armPos','fb',-12],
-      ['RD','MD','railPos','fb',-12],
-      ['MD','PP','movementState','fb',-22],
-      ['PP','TM','pathState·scanState','fb',16],
-      ['SD','PP','ScanState','fb',0],
-      ['TM','PR','missionState','misc',0],
-    ];
-    const rosEdges=EDGE_DEFS.map(([a,b,label,kind,bow])=>{
-      const p1=ctr(a), p2=ctr(b);
-      const mx=(p1.x+p2.x)/2, my=(p1.y+p2.y)/2;
-      const dx=p2.x-p1.x, dy=p2.y-p1.y; const len=Math.hypot(dx,dy)||1;
-      const perpx=-dy/len, perpy=dx/len;              // unit perpendicular
-      const cx=mx+perpx*bow, cy=my+perpy*bow;          // quad control point
-      // Trim both ends toward the control point so lines/arrowheads clear the
-      // node boxes instead of disappearing under them.
-      const trim=(p,R)=>{const vx=cx-p.x, vy=cy-p.y, l=Math.hypot(vx,vy)||1; return {x:p.x+vx/l*R, y:p.y+vy/l*R};};
-      const s=trim(p1,32), e=trim(p2,36);
-      return {
-        path:'M '+s.x.toFixed(1)+' '+s.y.toFixed(1)+' Q '+cx.toFixed(1)+' '+cy.toFixed(1)+' '+e.x.toFixed(1)+' '+e.y.toFixed(1),
-        color:EDGE_COL[kind], marker:'url(#rosArr-'+kind+')',
-        lx:cx.toFixed(1), ly:(cy-2).toFixed(1), label,
-      };
-    });
-    const rosNodes=Object.keys(NODE).map(k=>{
-      const n=NODE[k];
-      // accent stripe colour per node role
-      const accent=(k==='PP')?'#5631ea':(k==='MD')?'#0f62fe':(k==='SD')?'#8a7bff':(k==='PR')?'#62687c':'#c9ced6';
-      return {x:n.x, y:n.y, w:NW, h:NH, accent,
-        tx:(n.x+13), ly:(n.y+19), sy:(n.y+33), label:n.label, sub:n.sub};
-    });
-
-    // Intended ROS2 topics/nodes for the cell. These are NOT live: the ROS2
-    // graph runs inside the qc-humble Docker container and isn't introspected
-    // from this stdlib console backend, so no rates are shown. A grey dot +
-    // '—' rate marks each as "expected, not observed here".
-    const ros2=[
-      {name:'/scan_cell/state_machine',kind:'node',dot:'#c9ced6',hz:'—',detail:'lifecycle state machine'},
-      {name:'/move_group',kind:'node',dot:'#c9ced6',hz:'—',detail:'MoveIt2 · OMPL'},
-      {name:'/arm_controller/joint_states',kind:'topic',dot:'#c9ced6',hz:'—',detail:'sensor_msgs/JointState'},
-      {name:'/rail_controller/position',kind:'topic',dot:'#c9ced6',hz:'—',detail:'std_msgs/Float64'},
-      {name:'/miraco/points',kind:'topic',dot:'#c9ced6',hz:'—',detail:'sensor_msgs/PointCloud2 (scanner TBD)'},
-      {name:'/tf',kind:'topic',dot:'#c9ced6',hz:'—',detail:'tf2_msgs/TFMessage'},
-      {name:'/qc/registration',kind:'node',dot:'#c9ced6',hz:'—',detail:'TEASER++ · ICP (TBD)'},
-    ];
     const levelStyle={info:{bg:'#EAF0FF',fg:'#4F5568'},warn:{bg:'#FEF3C6',fg:'#7B3306'},error:{bg:'#FFF1F1',fg:'#A10000'}};
     const logs=s.logs.filter(l=>s.logFilter==='all'||l.l===s.logFilter).map(l=>({t:l.t,src:l.src,m:l.m,lv:l.l.toUpperCase(),lvBg:levelStyle[l.l].bg,lvFg:levelStyle[l.l].fg}));
     const fpill=(on)=>'padding:0 10px;height:26px;border:1px solid '+(on?'#000':'var(--color-charcoal-200)')+';border-radius:5px;background:'+(on?'#000':'#fff')+';color:'+(on?'#fff':'var(--color-charcoal-600)')+';font-size:11px;font-weight:700;cursor:pointer;font-family:var(--font-sans)';
     return {
-      joints, ros2, logs, rosEdges, rosNodes, jogToTargets:this.jogToTargets,
+      joints, logs, jogToTargets:this.jogToTargets,
       logAllPill:fpill(s.logFilter==='all'),logInfoPill:fpill(s.logFilter==='info'),logWarnPill:fpill(s.logFilter==='warn'),logErrorPill:fpill(s.logFilter==='error'),
       setLogAll:()=>this.setLogFilter('all'),setLogInfo:()=>this.setLogFilter('info'),setLogWarn:()=>this.setLogFilter('warn'),setLogError:()=>this.setLogFilter('error'),
     };
@@ -1064,16 +782,15 @@ class Component extends DCLogic {
     if(s.eStop){ stateLabel='E-STOP'; stateBg='#DA1E28'; stateBorder='#DA1E28'; stateDot='#fff'; stateAnim='animation:qcpulse 1s infinite'; }
     else if(s.softStop){ stateLabel='Soft stopped'; stateBg='rgba(217,119,6,.22)'; stateBorder='var(--color-amber-400)'; stateDot='var(--color-amber-300)'; stateFg='var(--color-amber-100)'; }
     else if(scanning){ stateLabel=(s.passNum===1?'Scanning · pass 1':'Scanning · pass 2'); stateBg='rgba(195,239,0,.18)'; stateBorder='var(--color-lime-500)'; stateDot='var(--color-lime-500)'; stateAnim='animation:qcpulse 1.4s infinite'; }
-    else if(stage==='plan'){ stateLabel='Path preview'; stateBg='rgba(86,49,234,.22)'; stateBorder='var(--color-blue-500)'; stateDot='var(--color-blue-500)'; }
     else if(stage==='result'){ stateLabel='Complete'; stateBg='rgba(69,174,74,.2)'; stateBorder='var(--color-green-500)'; stateDot='var(--color-green-500)'; }
 
     const steps=[
       {key:'load',label:'Load CAD'},{key:'place',label:'Place'},{key:'identify',label:'Part ID'},
-      {key:'plan',label:'Preview'},{key:'scan',label:'Scan'},{key:'result',label:'Result'},
+      {key:'scan',label:'Scan'},{key:'result',label:'Result'},
     ];
-    const order=['load','place','identify','plan','pass1','pass2','result'];
+    const order=['load','place','identify','pass1','pass2','result'];
     const curIdx=order.indexOf(stage);
-    const stepIdxMap={load:0,place:1,identify:2,plan:3,pass1:4,pass2:4,result:5};
+    const stepIdxMap={load:0,place:1,identify:2,pass1:3,pass2:3,result:4};
     const activeStep=stepIdxMap[stage];
     const stepVals=steps.map((st,i)=>{
       const done=i<activeStep, active=i===activeStep;
@@ -1089,26 +806,10 @@ class Component extends DCLogic {
     const secondaryBtn='flex:none;padding:0 20px;height:52px;border:1px solid var(--color-charcoal-200);border-radius:6px;background:#fff;color:#000;font-family:var(--font-sans);font-weight:700;font-size:14px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:8px';
     const dockBtn='display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px;border:1px solid var(--color-charcoal-200);border-radius:6px;background:#fff;color:#000;font-size:12px;font-weight:600;cursor:pointer;font-family:var(--font-sans)';
 
-    const vbtn=(on)=>'padding:0 12px;height:30px;border:0;border-radius:6px;background:'+(on?'#000':'transparent')+';color:'+(on?'#fff':'var(--color-charcoal-600)')+';font-size:12px;font-weight:700;cursor:pointer;font-family:var(--font-sans)';
-    const toggleBtn=(on)=>'width:40px;height:40px;display:flex;align-items:center;justify-content:center;border:1px solid '+(on?'#000':'var(--color-charcoal-100)')+';border-radius:8px;background:'+(on?'#000':'#fff')+';color:'+(on?'#fff':'var(--color-charcoal-600)')+';cursor:pointer;box-shadow:var(--elevation-sm)';
-
-    // run layout arrangement
-    const layout=this.props.runLayout||'console';
-    let runRootStyle,vpStyle,flowStyle;
-    const vpBase='position:relative;background:#e9edf2;min-width:0;min-height:0;';
-    if(layout==='console'){
-      runRootStyle='display:flex;height:100%;';
-      vpStyle=vpBase+'flex:1;';
-      flowStyle='width:400px;flex:none;display:flex;flex-direction:column;background:#fff;border-left:1px solid var(--color-charcoal-100);min-height:0;';
-    } else if(layout==='guided'){
-      runRootStyle='display:flex;flex-direction:row-reverse;height:100%;';
-      vpStyle=vpBase+'flex:1;';
-      flowStyle='width:460px;flex:none;display:flex;flex-direction:column;background:#fff;border-right:1px solid var(--color-charcoal-100);min-height:0;';
-    } else { // focus — viewport dominant, flow left narrow
-      runRootStyle='display:flex;height:100%;';
-      vpStyle=vpBase+'flex:1;order:2;';
-      flowStyle='width:360px;flex:none;order:1;display:flex;flex-direction:column;background:#fff;border-right:1px solid var(--color-charcoal-100);min-height:0;';
-    }
+    // Run layout: a single centred flow column (the embedded 3D viewer was
+    // removed with scan-path planning, so there is no side viewport).
+    const runRootStyle='display:flex;justify-content:center;height:100%;';
+    const flowStyle='width:100%;max-width:560px;flex:none;display:flex;flex-direction:column;background:#fff;border-left:1px solid var(--color-charcoal-100);border-right:1px solid var(--color-charcoal-100);min-height:0;';
 
     // ---- result (driven by the real scan record from the backend) ----
     // The scan pipeline is a stub (no capture/QC), so a completed scan yields
@@ -1154,39 +855,17 @@ class Component extends DCLogic {
       toggleMotors:this.toggleMotors, toggleDrag:this.toggleDrag, home:this.home, toggleSoft:this.toggleSoft,
       triggerEStop:this.triggerEStop, clearEStop:this.clearEStop, eStop:s.eStop,
       // run layout
-      runRootStyle,vpStyle,flowStyle,
-      // viewport overlays
-      vpModeLabel: scanning?'LIVE':(stage==='plan'?'PATH PREVIEW':'CELL VIEW'),
-      vpModeDot: scanning?'var(--color-lime-500)':(stage==='plan'?'var(--color-blue-500)':'#8A90A5'),
-      povWrapDisplay:s.povOn?'':'display:none',
-      viewIso:this.viewIso,viewTop:this.viewTop,viewFront:this.viewFront,viewSide:this.viewSide,resetView:this.resetView,
-      viewIsoStyle:vbtn(s.view==='iso'),viewTopStyle:vbtn(s.view==='top'),viewFrontStyle:vbtn(s.view==='front'),viewSideStyle:vbtn(s.view==='side'),
-      toggleGrid:this.toggleGrid,togglePath:this.togglePath,
-      gridBtnStyle:toggleBtn(s.gridOn),pathBtnStyle:toggleBtn(s.pathOn),
-      showCollision:stage==='plan', collisionBg:'var(--color-charcoal-50)',collisionBorder:'var(--color-charcoal-200)',collisionFg:'var(--color-charcoal-700)',collisionIcon:'alert-triangle',collisionMsg:'Collision + reachability checking runs in RViz/MoveIt — not verified here',
+      runRootStyle,flowStyle,
       // stepper
       steps:stepVals,
-      // external RViz launcher
-      pathGenerated: ['plan','pass1','pass2','result'].includes(stage),
-      rvizIdle: s.rviz==='idle', rvizOpening: s.rviz==='opening', rvizOpen: s.rviz==='open',
-      // RViz now shows the ARM (not the scan path), so it's available anytime —
-      // no longer gated on having generated a path.
-      rvizDisabledState: false,
-      rvizReadyState: s.rviz==='idle',
-      openRviz:this.openRviz, closeRviz:this.closeRviz,
-      rvizStatusLabel: s.rviz==='open'?'Window open':(s.rviz==='opening'?'Launching…':'Ready'),
-      rvizStatusBg: s.rviz==='open'?'#E7F5E8':(s.rviz==='opening'?'#EEE7FC':'#F6F7F4'),
-      rvizStatusFg: s.rviz==='open'?'#125D1A':(s.rviz==='opening'?'#5631EA':'var(--color-charcoal-600)'),
-      rvizLiveLine: (this.waypointCount?('planned toolpath · '+this.waypointCount+' waypoints'):'no path planned yet'),
       // stage flags
-      stPlace:stage==='place',stIdentify:stage==='identify',stLoad:stage==='load',stPlan:stage==='plan',
+      stPlace:stage==='place',stIdentify:stage==='identify',stLoad:stage==='load',
       stScanning:scanning,stResult:stage==='result',
       // handlers
       chooseCad:this.chooseCad, cadReady:this.cadReady, confirmPlaced:this.confirmPlaced,
       onPartInput:this.onPartInput, scanId:this.scanId,
-      onFile:this.onFile, generatePath:this.generatePath, backToId:this.backToId, sendToRobot:this.sendToRobot,
+      onFile:this.onFile, sendToRobot:this.sendToRobot,
       viewInAnalytics:this.viewInAnalytics, newPart:this.newPart,
-      planning:s.planning,
       // identify
       partId:s.partId,
       recentParts:this.PARTS.map(p=>({id:p.id, short:p.short, file:p.file, dims:p.dims,
@@ -1195,22 +874,11 @@ class Component extends DCLogic {
       cadChosen:!!s.matched, chosenShort:matched.short||'', chosenFile:matched.file||'', chosenDims:matched.dims||'',
       // load
       partShort:matched.short||'', partFile:matched.file||'', partIdShort:(matched.id||'').slice(0,24)+'…', partDims:matched.dims||'', partTris:matched.tris||'',
-      // plan (real numbers from /api/plan; '—' before a path is planned)
-      waypointCount:this.waypointCount||'—',
-      estTime:'—',
-      standoffMm:(this._planStats&&this._planStats.params&&this._planStats.params.standoff_mm)||'—',
-      // path-plan diagnostics (Debug tab) — real /api/plan output or '—'
-      planWaypoints:(this._planStats&&this._planStats.waypointCount)||'—',
-      planLines:(this._planStats&&this._planStats.lineCount)||'—',
-      planSpacing:(this._planStats&&this._planStats.spacingMm!=null)?this._planStats.spacingMm+' mm':'—',
-      planIncidence:(this._planStats&&this._planStats.maxIncidenceDeg!=null)?this._planStats.maxIncidenceDeg+'°':'—',
-      planCad:(this._planStats&&this._planStats.cadFile)||'—',
-      hasPlan:!!this._planStats,
       // scanning — the stub pipeline captures nothing, so no live capture
       // figures to show. Kept honest rather than animated.
       passLabel:'RECORDING SCAN',
       ringDash:'0 '+(Math.PI*2*52).toFixed(1),
-      curWaypoint:(this.waypointCount||'—')+' planned',
+      curWaypoint:'—',
       pointsCaptured:'—',
       liveCoverage:'—',
       // result — from the real scan record (all '—' until QC exists)

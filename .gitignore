@@ -1,25 +1,20 @@
-# ROS2 / colcon build artifacts
-ros2_ws/build/
-ros2_ws/install/
-ros2_ws/log/
-
 # Python
 __pycache__/
 *.pyc
 .venv/
+.venv312/
 .pytest_cache/
 
-# Vendored ROS2 description clone (large; reproduced by scripts/setup_arm_viz.sh)
-ros2_ws/src/rokae_ros2/
+# PyInstaller / desktop-build artifacts (the console is a web app, not a binary)
+build/
+dist/
 
 # OS
 .DS_Store
 
-# local WSL build helper (machine-specific path)
-ros2_ws/build_local.sh
-
+# Arm SDK runtime logs
 _rokae_log_/
-
 logs/
 
+# Site-specific config + CAD (local only)
 config/

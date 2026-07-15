@@ -4,23 +4,21 @@
 #
 #   git clone https://github.com/CharlieRa0105/QC-scanner.git
 #   cd QC-scanner
-#   ./setup.sh                 # env + deps (run the web console from source)
-#   ./setup.sh --with-docker   # also build the qc-humble RViz Docker image
+#   ./setup.sh                 # prepare the env to run the web console from source
 #
 # What it does (idempotent — safe to re-run):
 #   1. Ensures `uv` is available (prints the install command if not).
 #   2. Installs a standalone CPython 3.12 via uv.  <-- REQUIRED: the ROKAE xCore
 #      SDK only ships 3.8-3.12 builds; the console can't talk to the arm on 3.13+.
-#   3. Creates .venv312 and installs the Python deps (numpy, gmsh).
+#   3. Creates the .venv312 interpreter the console runs under.
 #   4. Locates the ROKAE xCore SDK (needed for the physical arm) and reports
 #      how to supply it if it's missing.
-#   5. (--with-docker) Builds the qc-humble RViz container (large).
 #
 # The console is a web app served from source — start it with
 # scripts/run_console.sh (http://127.0.0.1:8000). There is no packaged binary.
 #
-# Nothing here is committed to git (venv, binary, Docker image, SDK are all
-# gitignored / external) — that's why this script exists.
+# Nothing here is committed to git (venv, SDK are gitignored / external) —
+# that's why this script exists.
 # =============================================================================
 set -euo pipefail
 
@@ -28,12 +26,10 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$REPO_ROOT"
 
 # ---- options ----------------------------------------------------------------
-WITH_DOCKER=0
 for arg in "$@"; do
   case "$arg" in
-    --with-docker|--all) WITH_DOCKER=1 ;;
     -h|--help)
-      grep '^#' "$0" | sed 's/^# \{0,1\}//' | head -30
+      grep '^#' "$0" | sed 's/^# \{0,1\}//' | head -25
       exit 0 ;;
     *) echo "unknown option: $arg (try --help)" >&2; exit 2 ;;
   esac
@@ -51,7 +47,7 @@ VENV=".venv312"
 # ---- 0. make repo scripts executable ---------------------------------------
 # git may deliver these without the +x bit on a fresh clone; fix it so the
 # documented `scripts/run_console.sh` etc. work directly.
-chmod +x setup.sh scripts/*.sh docker/*.sh 2>/dev/null || true
+chmod +x setup.sh scripts/*.sh 2>/dev/null || true
 
 # ---- 1. uv ------------------------------------------------------------------
 say "Checking for uv (Python toolchain manager)"
@@ -68,8 +64,8 @@ say "Installing CPython ${PY_VERSION} (SDK requires 3.8-3.12)"
 uv python install "${PY_VERSION}"
 ok "Python ${PY_VERSION} available"
 
-# ---- 3. venv + deps ---------------------------------------------------------
-say "Creating ${VENV} and installing Python dependencies"
+# ---- 3. venv ----------------------------------------------------------------
+say "Creating ${VENV} (the Python 3.12 interpreter the console runs under)"
 # Reuse a healthy venv, but rebuild one that's missing or broken. A venv copied
 # or moved between paths has stale absolute shebangs, so verify it actually runs.
 if [ -x "${VENV}/bin/python" ] && "${VENV}/bin/python" -c "pass" >/dev/null 2>&1; then
@@ -78,8 +74,9 @@ else
   [ -e "${VENV}" ] && warn "${VENV} missing/broken (e.g. moved from another path) — rebuilding"
   uv venv --clear --python "${PY_VERSION}" "${VENV}"
 fi
-uv pip install --python "${VENV}/bin/python" numpy gmsh
-ok "${VENV} ready with numpy, gmsh"
+# The console backend is Python-stdlib only, so there are no pip deps to install
+# here — the venv exists purely to pin the SDK-compatible 3.12 interpreter.
+ok "${VENV} ready"
 
 # ---- 4. ROKAE SDK -----------------------------------------------------------
 say "Locating the ROKAE xCore SDK (needed to talk to the physical arm)"
@@ -100,31 +97,12 @@ else
   warn "  • it must include a CPython 3.12 build (xCoreSDK_python.cpython-312*.so)"
 fi
 
-# ---- 5. Docker image (optional) --------------------------------------------
-if [ "$WITH_DOCKER" = 1 ]; then
-  say "Building the qc-humble RViz container (large — ~5.6 GB, needs network)"
-  if ! command -v docker >/dev/null 2>&1; then
-    warn "docker not installed — skipping. RViz won't be available."
-  elif [ ! -f docker/build.sh ]; then
-    warn "docker/build.sh missing — skipping."
-  elif bash docker/build.sh; then
-    ok "qc-humble image built"
-  else
-    warn "docker build failed — see output above. RViz won't be available."
-  fi
-else
-  warn "Skipping Docker image (RViz). Add --with-docker or --all to build it."
-fi
-
 # ---- done -------------------------------------------------------------------
 say "Setup complete."
 cat <<EOF
 
   Run the console (web app from source, connects to the arm):
       scripts/run_console.sh          →  http://127.0.0.1:8000
-
-  RViz arm view (if built with --with-docker):
-      docker/run_arm.sh
 
   Reminder: the arm must be on the network at 192.168.2.160 (or edit the IP in
   the console header). Motion is enabled by default — set QC_ALLOW_MOTION=0 for
