@@ -19,9 +19,23 @@ The console is a **web app served from source** — a Python stdlib HTTP server
 (`backend/`) serves the front-end (`gui/`) and a small JSON API. There is no
 build step and no packaged binary.
 
-The knowledge base, decision logs, and session history live in the vault at
-`~/Documents/ClaudeVault/ClaudeVault/Projects/Quality Control Scanner/`.
-This directory is code only.
+**Scope note (2026-07-15):** this repo is the home for the **whole system**, not
+just the console. Today the working code is the console + the pure-Python coverage
+planner (`libs/path_planning/`); the target is a ROS 2 mission graph (PathPlanner
+with MoveIt, MovementDriver, TaskManager, ScanningDriver, Phase 2) driving the arm,
+with the console as the operator UI over it via rosbridge. All of it lives here.
+
+**Read next, in order:**
+1. `docs/architecture.md` — the settled architecture the code conforms to (the
+   node graph + the 13 decisions + the end-to-end mission).
+2. `docs/refactor-guide.md` — the current state, the cleanup tasks, and what to
+   build next (in priority order) to reach that architecture.
+3. `backend/README.md` — the console backend + API reference.
+
+The reasoning behind the decisions, decision logs, and session history live in the
+vault at `~/Documents/ClaudeVault/ClaudeVault/Projects/Quality Control Scanner/` on
+Ra's home machine — **not on this machine.** This repo is self-contained via the
+docs above; ask Ra for any *why* not captured here.
 
 ---
 
@@ -68,10 +82,25 @@ QC-scanner/
 │   ├── vendor/             ← vendored React/ReactDOM (offline, no CDN)
 │   └── assets/ , _ds/      ← icons, logos, Dexory design system
 │
+├── libs/path_planning/     ← pure-Python coverage planner (CAD → scan path)
+│                             cad_loader / normal_estimation /
+│                             waypoint_generator / incidence_cone_modifier
+├── scripts/
+│   ├── run_console.sh      ← launch wrapper (pins .venv312, finds the SDK)
+│   └── plan_path.py        ← CLI: CAD file → ScanPath JSON
+├── docs/                   ← architecture.md + refactor-guide.md (read these)
+├── ros2_ws/src/            ← ROS 2 packages (arm driver built; mission graph to build).
+│                             NOTE: contains the vendor rokae_ros2 clone (own .git,
+│                             a dependency — not committed here). Currently untracked.
 ├── config/cad/             ← CAD files backing the part catalogue
-├── data/scans.json         ← recorded scans (results store)
-└── scripts/run_console.sh  ← launch wrapper (pins .venv312, finds the SDK)
+└── data/scans.json         ← recorded scans (results store)
 ```
+
+> **`libs/path_planning/` has a known flaw to fix:** `waypoint_generator.py`
+> rasters by a single coordinate and doesn't separate points by face normal, so
+> non-prismatic parts collapse to one line / mix faces. The fix (face-grouping
+> before rastering) is task 2.3 in `docs/refactor-guide.md`. The other three
+> planner modules are correct.
 
 ---
 
@@ -100,7 +129,15 @@ Full detail: [backend/README.md](backend/README.md).
 
 ## Key settled decisions
 
+Hardware:
 - **Arm:** ROKAE xMate SR5-5/0.9C — 6-axis, 919mm reach, 5kg payload, ±0.03mm repeatability
 - **Scanner:** Revopoint MIRACO Plus — arm-mounted structured-light (capture not yet integrated)
 - **Accuracy target:** best-achievable ≈65–75µm volumetric; CMM referee for tight-tolerance features
-- **Workflow:** scan-flip-scan; each pass is an independent inspection; no cross-pass merge
+- **Workflow:** one scan mission per run; the operator flips the part and re-runs for the other side (no cross-pass merge, no flip logic in software)
+- **No rail:** the arm reaches the whole part (≤1500×700mm) from a fixed base
+
+Software architecture (the 13 decisions in full: `docs/architecture.md` §4):
+- **PathPlanner owns the whole plan** incl. MoveIt (plan-fully-then-execute); **MovementDriver only moves**
+- **rosbridge** links the web app to the ROS 2 graph (host has no ROS 2 — Docker/Humble only)
+- **One automatic pass/fail = scan quality** (lives in Phase 2); the *part* verdict is a human call
+- **Operator is the last safety switch** (confirm-to-execute) + a separate physical E-stop
