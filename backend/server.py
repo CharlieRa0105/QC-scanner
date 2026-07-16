@@ -39,6 +39,7 @@ Then open http://127.0.0.1:8000/ in a browser.
 
 import argparse
 import json
+import math
 import os
 import sys
 import traceback
@@ -400,13 +401,38 @@ class QCRequestHandler(SimpleHTTPRequestHandler):
             if not waypoints:
                 self._send_json(400, {"ok": False, "error": "no waypoints to scan"})
                 return
+            orient_deg = payload.get("orientRpyDeg") or [0, 0, 0]
+            orient_rpy = [math.radians(float(a)) for a in orient_deg[:3]]
             result = ROBOT.start_scan_trace(
                 waypoints,
                 incidence_deg=float(payload.get("incidenceDeg", 10.0)),
                 speed_mms=payload.get("speedMms"),
+                orient_rpy=orient_rpy,
             )
             result["source"] = source
             self._send_json(200, result)
+            return
+
+        # ---- NO-MOTION preview: register + reachability-check the scan path for
+        # a given orientation, returned in the viewer frame ("Generate path").
+        if route == "/api/robot/scan_preview":
+            waypoints = payload.get("waypoints")
+            if not waypoints:
+                try:
+                    with open(SCANPATH_FILE) as f:
+                        waypoints = json.load(f).get("waypoints", [])
+                except FileNotFoundError:
+                    self._send_json(400, {"ok": False, "error": f"no {SCANPATH_FILE.name}"})
+                    return
+            orient_deg = payload.get("orientRpyDeg") or [0, 0, 0]
+            orient_rpy = [math.radians(float(a)) for a in orient_deg[:3]]
+            try:
+                result = ROBOT.scan_preview(waypoints, orient_rpy=orient_rpy,
+                                            incidence_deg=float(payload.get("incidenceDeg", 10.0)))
+                self._send_json(200, result)
+            except Exception as e:  # noqa: BLE001
+                traceback.print_exc()
+                self._send_json(500, {"ok": False, "error": str(e)})
             return
 
         # ---- scan lifecycle ----

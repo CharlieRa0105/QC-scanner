@@ -30,9 +30,17 @@ read that first. TL;DR of what makes Cartesian moves go on the SR5:
   self-calibrates **flangeInBase→endInRef** (reads current pose in both frames),
   and `follow_path` does table→flangeInBase→endInRef before commanding — before
   this, positive-z flangeInBase targets were rejected and "nothing moved".
-- **Open (next):** orientation-aware scanning (head follows surface AND aims at the
-  part), vs the current position-only trace. 3D viewport rendering issues deferred.
-  Marked-corner offset in `scanpath_arm.json` may need calibrating to the real part.
+- **CAD scan = overhead X-raster.** `scan_trace` builds an X-raster grid over the
+  part footprint (part centred at the FIXED origin 0,0,0 = arm base — no drift),
+  scanner straight DOWN from 250 mm, each row a continuous blended MoveL sweep,
+  unreachable points skipped. Debug viewport: **90° flip buttons → Generate path
+  (preview+reachability) → Scan → arm**; camera-follow always on. Endpoints
+  `/api/robot/{scan_trace,scan_preview}`. Tunable: `QC_RASTER_STEP_M`,
+  `QC_STANDOFF_M`. Full detail: `docs/session-logs/2026-07-16.md` "Continued (2)".
+- **Open (next):** surface-normal aiming (currently straight-down for a clean
+  raster — add as a toggle); real part registration (part assumed at origin;
+  jog-to-corner needed for parts elsewhere); confirm the raster lands on the
+  physical part; viewport polish.
 - MoveL singularity avoidance (`setAvoidSingularity`) is opt-in via
   `QC_ROBOT_CLASS=xMateRobot QC_AVOID_SINGULARITY=1` (off by default).
 

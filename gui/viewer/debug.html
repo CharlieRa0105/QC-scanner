@@ -41,37 +41,21 @@
   <div id="brand" class="panel"><span class="dot"></span><b>Debug viewport</b><span>· arm-base frame, mm</span></div>
 
   <div id="tools" class="panel">
-    <div class="grp-label">Add outline</div>
+    <div class="grp-label">1 · Orient part (90° flips, stays grounded)</div>
     <div class="row">
-      <button class="ghost" id="addCircle">◯ Circle</button>
-      <button class="ghost" id="addSquare">▢ Square</button>
-      <button class="ghost" id="addTriangle">△ Tri</button>
+      <button class="ghost" id="flipX">Flip X</button>
+      <button class="ghost" id="flipY">Flip Y</button>
+      <button class="ghost" id="spinZ">Spin Z</button>
+      <button class="ghost" id="flipReset" title="Reset orientation">⟲</button>
     </div>
-    <div class="grp-label">Shapes</div>
-    <div id="shapeChips"><span style="font-size:11px;color:var(--ink-dim)">none yet</span></div>
-    <div class="row">
-      <div class="seg" style="flex:1" id="gizmoSeg">
-        <button data-mode="translate" class="on">Move</button>
-        <button data-mode="rotate">Rotate</button>
-      </div>
-      <button class="ghost" id="delShape" title="Delete selected">✕</button>
-    </div>
-    <div class="grp-label">Actions</div>
-    <button class="ghost" id="traceBtn">Trace outline (preview)</button>
-    <button class="primary" id="sendBtn" disabled>Send to arm</button>
-    <div class="toggle" id="followTgl"><span>Camera-follow (preview)</span><span class="sw"></span></div>
+    <div class="grp-label">2 · Generate + scan</div>
+    <button class="ghost" id="genPathBtn">Generate path (preview + reachability)</button>
+    <button class="primary" id="scanArmBtn">Scan →&nbsp;arm</button>
     <div class="grp-label">Camera</div>
     <div class="seg" id="viewSeg">
       <button data-view="orbit" class="on">Orbit</button>
       <button data-view="scanner">Scanner POV</button>
     </div>
-  </div>
-
-  <div id="pose" class="panel">
-    <div><span class="k">shape&nbsp;</span><span id="poseName">—</span></div>
-    <div><span class="k">pos&nbsp;&nbsp;&nbsp;</span><span id="posePos">—</span> <span class="k">mm</span></div>
-    <div><span class="k">rot&nbsp;&nbsp;&nbsp;</span><span id="poseRot">—</span> <span class="k">deg</span></div>
-    <div><span class="k">arm tip</span> <span id="tipPos">—</span> <span class="k">mm</span></div>
   </div>
 
   <div id="status" class="panel">status: <b id="statusText">loading…</b></div>

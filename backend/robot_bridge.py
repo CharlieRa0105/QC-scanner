@@ -67,6 +67,12 @@ SDK_ROOT = _resolve_sdk_root()
 # Master motion switch. Any value other than 0/false/no leaves motion enabled.
 ALLOW_MOTION = os.environ.get("QC_ALLOW_MOTION", "1").lower() not in ("0", "false", "no", "")
 DEFAULT_JOG_SPEED = float(os.environ.get("QC_JOG_SPEED", "60"))  # mm/s end-effector
+# The part is registered at the FIXED origin (0,0,0 = arm base, table frame) --
+# NOT relative to the live pose (that drifted). The scan is an OVERHEAD X-raster:
+# a grid ABOVE the part footprint, sweeping X, stepping Y (boustrophedon), the
+# scanner looking straight DOWN at the part from `standoff` above its top.
+RASTER_STEP_M = float(os.environ.get("QC_RASTER_STEP_M", "0.01"))   # grid spacing (X & Y rows)
+STANDOFF_M = float(os.environ.get("QC_STANDOFF_M", "0.25"))         # 200-300 mm working distance
 # Cartesian scan-path tracing (follow_path -> MoveL) uses the still-UNVALIDATED
 # pose units/rpy convention, so it is DISABLED on the real arm by default. Prove
 # move_pose at low speed with Ra + the E-stop first, then set QC_ALLOW_SCAN_TRACE=1
@@ -246,6 +252,18 @@ def _axis_angle_R(axis, ang):
 
 def _vcross(a, b):
     return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+
+
+def _look_along_z(zdir, up_ref=(0.0, 0.0, 1.0)):
+    """3x3 rotation whose +Z axis is `zdir` (unit-ish); roll fixed by up_ref
+    (free DOF -- any consistent choice). Columns = (x, y, z) basis."""
+    z = _vnorm(list(zdir))
+    up = list(up_ref)
+    if abs(sum(z[i] * up[i] for i in range(3))) > 0.98:   # z ~parallel to up_ref
+        up = [1.0, 0.0, 0.0]
+    x = _vnorm(_vcross(up, z))
+    y = _vcross(z, x)
+    return [[x[0], y[0], z[0]], [x[1], y[1], z[1]], [x[2], y[2], z[2]]]
 
 
 def _vnorm(a):
@@ -699,27 +717,76 @@ class RobotBridge:
             return dict(self._follow)
 
     # ---- oriented continuous scan (head aims at the part within a cone) -------
-    def _wp_to_endinref_pose(self, pos, quat, incidence_deg):
-        """Convert a TABLE-frame waypoint (position + aim quaternion) into a
-        reachable endInRef pose (trans_m, rpy_rad). The aim points the tool at the
-        surface; if the EXACT aim has no IK solution, tilt the tool up to
-        incidence_deg off it (staying within the acceptable incidence cone) until a
-        reachable orientation is found -- smallest tilt first. Returns (trans, rpy)
-        or None if the whole cone is unreachable. On the mock (calc_ik_ok True) the
-        exact aim is always used."""
-        p_fb, q_fb = _table_to_arm_base(pos, quat)      # table -> flangeInBase
-        if self._fb2er is not None:                     # flangeInBase -> endInRef
+    def _endinref_point(self, p_table):
+        """A TABLE-frame POSITION -> endInRef (table->flangeInBase->endInRef)."""
+        p_fb = _table_to_arm_base(p_table, [0, 0, 0, 1])[0]
+        if self._fb2er is not None:
             R, t = self._fb2er
-            p_er = [_mv3(R, p_fb)[k] + t[k] for k in range(3)]
-            R_er = _mm3(R, _quat_to_R(q_fb))
-        else:                                           # mock: command frame == fb
-            p_er, R_er = list(p_fb), _quat_to_R(q_fb)
-        aim_rpy = _R_to_rpy(R_er)
+            return [_mv3(R, p_fb)[k] + t[k] for k in range(3)]
+        return list(p_fb)   # mock: command frame == fb
+
+    def _dir_table_to_er(self, n):
+        """A DIRECTION (table frame) -> endInRef. Directions only rotate: table->fb
+        is Rx(pi) (y,z flip), then fb->er is the self-calibrated rotation."""
+        n_fb = [n[0], -n[1], -n[2]]
+        if self._fb2er is not None:
+            return _mv3(self._fb2er[0], n_fb)
+        return n_fb
+
+    def _build_scan_poses(self, waypoints, orient_rpy):
+        """Build the scan as an OVERHEAD X-RASTER over the part footprint, part
+        CENTRED on the fixed origin (0,0,0 = arm base, table frame) -- NOT relative
+        to the live pose (which drifted).
+
+        Take the part's surface points (planner targets), centre them on the origin
+        and apply orient_rpy (the viewer flips). Over the resulting XY footprint lay
+        a regular grid: sweep +X, step Y, sweep -X, ... (boustrophedon). Each grid
+        node is a scan pose STANDOFF above the part top, the tool looking straight
+        DOWN at the part. Convert to endInRef. Returns [(position_er, aim_rpy, row)]."""
+        R = _rpy_to_R(orient_rpy)
+        pts = [[float(v) for v in (wp.get("target") or wp.get("position"))] for wp in waypoints]
+        C = [sum(t[i] for t in pts) / len(pts) for i in range(3)]      # centroid (table)
+        oriented = [_mv3(R, [t[i] - C[i] for i in range(3)]) for t in pts]   # centred + oriented
+        xs = [p[0] for p in oriented]; ys = [p[1] for p in oriented]; zs = [p[2] for p in oriented]
+        xmin, xmax = min(xs), max(xs)
+        ymin, ymax = min(ys), max(ys)
+        scan_z = max(zs) + STANDOFF_M                                  # above the part top
+        # aim straight down at the part: tool +Z = table up (scanner looks down -Z)
+        aim_rpy = _R_to_rpy(_look_along_z(_vnorm(self._dir_table_to_er([0, 0, 1]))))
+
+        def frange(a, b, step):
+            n = int(math.floor((b - a) / step + 1e-9)) + 1
+            grid = [a + i * step for i in range(max(1, n))]
+            if b - grid[-1] > step * 0.25:
+                grid.append(b)                                        # include the far edge
+            return grid
+
+        rowsY = frange(ymin, ymax, RASTER_STEP_M)
+        poses = []
+        for row, y in enumerate(rowsY):
+            xline = frange(xmin, xmax, RASTER_STEP_M)
+            if row % 2 == 1:
+                xline = xline[::-1]                                    # boustrophedon
+            for x in xline:
+                poses.append((self._endinref_point([x, y, scan_z]), aim_rpy, row))
+        cols = len(poses) // max(1, len(rowsY))
+        self._blog(f"[bridge] scan poses: OVERHEAD X-raster at origin (0,0,0 arm base), "
+                   f"footprint x[{xmin*1000:.0f},{xmax*1000:.0f}] y[{ymin*1000:.0f},{ymax*1000:.0f}]mm, "
+                   f"{len(rowsY)} rows x ~{cols} cols = {len(poses)} pts, standoff {STANDOFF_M*1000:.0f}mm, "
+                   f"orient_rpy_deg={[round(math.degrees(a),1) for a in orient_rpy]}")
+        return poses
+
+    def _cone_reachable(self, p_er, aim_rpy, incidence_deg):
+        """Given a target POSITION + aim orientation in endInRef, return a reachable
+        rpy: the exact aim if it has an IK solution, else the tool tilted up to
+        incidence_deg off it (smallest tilt first) so the scanner stays within the
+        acceptable incidence cone. None if the whole cone is unreachable. On the
+        mock (calc_ik_ok True) the exact aim is always returned."""
         arm = self._arm
         ok = arm.calc_ik_ok(p_er, aim_rpy)
-        if ok or ok is None:                            # reachable, or calcIk n/a
-            return p_er, aim_rpy
-        # cone search: tilt the tool's forward axis within +/- incidence_deg
+        if ok or ok is None:
+            return aim_rpy
+        R_er = _rpy_to_R(aim_rpy)
         fwd = _vnorm(_mv3(R_er, [0, 0, 1]))
         ref = [0, 0, 1] if abs(fwd[2]) < 0.9 else [1, 0, 0]
         u = _vnorm(_vcross(fwd, ref))
@@ -733,10 +800,43 @@ class RobotBridge:
                 axis = [u[i] * math.cos(az) + v[i] * math.sin(az) for i in range(3)]
                 rpy = _R_to_rpy(_mm3(_axis_angle_R(axis, a), R_er))
                 if arm.calc_ik_ok(p_er, rpy):
-                    return p_er, rpy
+                    return rpy
         return None
 
-    def start_scan_trace(self, waypoints, incidence_deg=10.0, speed_mms=None):
+    def _er_to_scene(self, p_er):
+        """endInRef POSITION -> viewer scene/table frame (inverse of the command
+        pipeline), so previewed poses render in the right spot next to the arm."""
+        if self._fb2er is not None:
+            R, t = self._fb2er
+            p_fb = _mv3(_mT3(R), [p_er[i] - t[i] for i in range(3)])
+        else:
+            p_fb = list(p_er)
+        return [p_fb[0], -p_fb[1], MOUNT_H - p_fb[2]]   # fb->scene (involution)
+
+    def scan_preview(self, waypoints, orient_rpy=(0.0, 0.0, 0.0), incidence_deg=10.0):
+        """NO MOTION. Register the scan path for `orient_rpy` (anchor home-0.15z,
+        aim at part) and report each pose's reachability (calcIk within the cone),
+        returned in the VIEWER scene frame so 'Generate path' can draw exactly what
+        would run. {ok, poses:[{position,target,reachable}], n, n_reachable}."""
+        with self._lock:
+            if self._arm is None:
+                return {"ok": False, "error": "not connected"}
+            built = self._build_scan_poses(waypoints, orient_rpy)
+            if not built:
+                return {"ok": False, "error": "could not read home pose to anchor the scan"}
+            poses, nreach = [], 0
+            for (p_er, aim_rpy, lid) in built:
+                reachable = self._cone_reachable(p_er, aim_rpy, incidence_deg) is not None
+                nreach += 1 if reachable else 0
+                nrm = [_rpy_to_R(aim_rpy)[i][2] for i in range(3)]         # +Z = outward normal
+                t_er = [p_er[i] - 0.3 * nrm[i] for i in range(3)]          # surface point
+                poses.append({"position": self._er_to_scene(p_er),
+                              "target": self._er_to_scene(t_er),
+                              "reachable": reachable})
+        return {"ok": True, "poses": poses, "n": len(poses), "n_reachable": nreach}
+
+    def start_scan_trace(self, waypoints, incidence_deg=10.0, speed_mms=None,
+                         orient_rpy=(0.0, 0.0, 0.0)):
         """Background wrapper for scan_trace(), mirroring start_follow_path so the
         UI polls follow_status() and can abort. Rejects if a trace is running,
         motion is disabled, or the arm isn't connected."""
@@ -759,7 +859,8 @@ class RobotBridge:
                     self._follow["completed"] = done
                     self._follow["total"] = total
             rep = self.scan_trace(waypoints, incidence_deg=incidence_deg,
-                                  speed_mms=speed_mms, on_progress=_progress)
+                                  speed_mms=speed_mms, orient_rpy=orient_rpy,
+                                  on_progress=_progress)
             with self._lock:
                 self._follow = {"running": False, "completed": rep["completed"],
                                 "total": rep["total"], "aborted": rep["aborted"],
@@ -770,12 +871,14 @@ class RobotBridge:
         return {"ok": True, "started": True, "total": len(waypoints)}
 
     def scan_trace(self, waypoints, incidence_deg=10.0, speed_mms=None,
-                   reach_timeout_s=60.0, tick_s=0.1, on_progress=None):
-        """CONTINUOUS oriented scan. Each scan LINE (grouped by line_id) is run as
-        ONE blended MoveL sweep -- the head flows through it without stopping, the
-        tool aiming at the part within +/- incidence_deg the whole way. Between
-        lines the arm repositions with a MoveJ. Returns {ok, completed, total,
-        aborted, error}. Abortable between lines and via stop()/estop()."""
+                   orient_rpy=(0.0, 0.0, 0.0), reach_timeout_s=60.0, tick_s=0.1,
+                   on_progress=None):
+        """CONTINUOUS oriented scan, REGISTERED to the assumed part placement
+        (centroid at home + (0,0,-150mm), rotated by orient_rpy). Each scan LINE
+        (line_id) runs as ONE blended MoveL sweep -- the head flows through it
+        without stopping, the tool aiming at the part within +/- incidence_deg the
+        whole way. Between lines the arm repositions with a MoveJ. Returns {ok,
+        completed, total, aborted, error}."""
         speed = float(speed_mms) if speed_mms else DEFAULT_JOG_SPEED
         total = len(waypoints)
         self._abort.clear()
@@ -792,36 +895,54 @@ class RobotBridge:
             if self._kind == "real" and not ALLOW_SCAN_TRACE:
                 return _report(False, 0, error="scan tracing disabled (QC_ALLOW_SCAN_TRACE=1)")
 
-        # group consecutive waypoints by line_id, preserving order
+        # Register the whole path to the part placement (reads home, anchors,
+        # orients, aims) -> endInRef aim poses.
+        with self._lock:
+            if self._arm is None:
+                return _report(False, 0, error="not connected")
+            built = self._build_scan_poses(waypoints, orient_rpy)
+        if not built:
+            return _report(False, 0, error="no scan poses (empty part path)")
+        total = len(built)                 # progress denominator = raster points
+
+        # group consecutive built poses by line_id, preserving order
         lines = []
-        for wp in waypoints:
-            lid = wp.get("line_id", 0)
+        for (p_er, aim_rpy, lid) in built:
             if not lines or lines[-1][0] != lid:
                 lines.append((lid, []))
-            lines[-1][1].append(wp)
-        self._blog(f"[bridge] scan_trace: {total} waypoints in {len(lines)} line(s), "
+            lines[-1][1].append((p_er, aim_rpy))
+        self._blog(f"[bridge] scan_trace: {total} raster pts in {len(lines)} row(s), "
                    f"incidence +/-{incidence_deg} deg, speed {speed} mm/s")
 
         completed = 0
-        for lid, wps in lines:
+        for lid, items in lines:
             if self._abort.is_set():
                 return _report(False, completed, aborted=True, error="aborted")
             # Resolve every pose in this line to a reachable endInRef pose first
-            # (a continuous MoveL can't bail mid-stroke, so validate the whole line).
-            poses = []
-            for wp in wps:
+            # (a continuous MoveL can't bail mid-stroke, so resolve the line first).
+            # Unreachable waypoints (e.g. down-facing surfaces below the table) are
+            # SKIPPED, not fatal -- the sweep traces whatever IS reachable.
+            poses, skipped = [], 0
+            for (p_er, aim_rpy) in items:
                 if self._abort.is_set():
                     return _report(False, completed, aborted=True, error="aborted")
                 with self._lock:
                     if self._arm is None:
                         return _report(False, completed, error="connection lost")
-                    res = self._wp_to_endinref_pose(wp.get("position"), wp.get("quaternion"),
-                                                    incidence_deg)
-                if res is None:
-                    return _report(False, completed,
-                                   error=f"line {lid}: a waypoint is unreachable within "
-                                         f"+/-{incidence_deg} deg of the surface normal")
-                poses.append(res)
+                    rpy = self._cone_reachable(p_er, aim_rpy, incidence_deg)
+                if rpy is None:
+                    skipped += 1
+                    continue
+                poses.append((p_er, rpy))
+            if skipped:
+                self._blog(f"[bridge] line {lid}: skipped {skipped}/{len(items)} unreachable "
+                           f"waypoint(s) (within +/-{incidence_deg} deg)")
+            if not poses:
+                self._blog(f"[bridge] line {lid}: no reachable waypoints -- skipping line")
+                completed += len(items)
+                if on_progress:
+                    on_progress(completed, total)
+                continue
 
             # Reposition to the line start (MoveJ, arrive at the scan orientation),
             # then run the whole line as one continuous blended MoveL sweep.
@@ -847,7 +968,7 @@ class RobotBridge:
                 return _report(False, completed, aborted=self._abort.is_set(),
                                error=f"line {lid}: sweep did not complete")
 
-            completed += len(wps)
+            completed += len(items)
             if on_progress:
                 on_progress(completed, total)
 

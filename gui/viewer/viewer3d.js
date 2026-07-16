@@ -313,6 +313,10 @@
       scannerCam.lookAt(tip.clone().addScaledVector(fwd, 1.0));
     }
 
+    // Rotate the part mesh in place (roll/pitch/yaw rad) so the operator can
+    // orient the CAD; the scan path is re-oriented to match in the consumer.
+    function orientPart(rx, ry, rz) { partGroup.rotation.set(rx || 0, ry || 0, rz || 0, 'XYZ'); }
+
     // table-frame (m) <-> arm-base-frame (mm) conversions for the debug UI.
     function tableToArmMm(v) { return [v.x * 1000, -v.y * 1000, (H - v.z) * 1000]; }
     function armMmToTable(a) { return new THREE.Vector3(a[0] / 1000, -a[1] / 1000, H - a[2] / 1000); }
@@ -359,7 +363,8 @@
       THREE, scene, renderer, canvas, controls, orbitCam, scannerCam,
       cfg, mountHeight: H,
       buildArm, setJoints, solveIK, tipWorld, arm,
-      buildPart, buildPath, placeAt, play, waypoints: () => waypoints,
+      buildPart, buildPath, placeAt, play, waypoints: () => waypoints, orientPart,
+      partGroup,
       setLayer, setView, frameView, tableToArmMm, armMmToTable,
       dispose,
     };
