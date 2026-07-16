@@ -1,0 +1,9 @@
+# Play a planned trajectory on the arm. Served by MovementDriver (execution
+# only -- no planning). (goal / result / feedback separated by '---'.)
+moveit_msgs/RobotTrajectory trajectory
+---
+bool success
+string message
+---
+uint32 point_index    # trajectory point currently confirmed reached
+uint32 total          # total trajectory points

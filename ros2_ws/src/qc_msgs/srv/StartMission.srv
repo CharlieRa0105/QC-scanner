@@ -1,0 +1,5 @@
+# Ask TaskManager to plan a mission for a part (no motion). Request/response.
+string part_id
+---
+bool accepted        # false if the part is unknown or a mission is already active
+string message

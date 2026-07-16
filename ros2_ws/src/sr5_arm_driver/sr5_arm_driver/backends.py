@@ -13,14 +13,52 @@ Interface (all joint values are RADIANS, the ROS convention):
     is_moving() -> bool
     update(dt)                       # advance state by dt seconds (mock physics / poll real)
     move(target_rad, speed_pct)      # queue a joint move
+    move_pose(pos_m, quat_xyzw, speed_mms)  # queue a CARTESIAN move (probe pose)
+    get_pose() -> (pos_m, quat_xyzw) # current end-effector pose, arm base frame
     set_power(on) -> bool
     set_drag(on) -> bool
     clear_alarm()
     stop()
+
+Cartesian poses (move_pose / get_pose) are in the ARM BASE frame: position in
+METRES, orientation as a quaternion [x, y, z, w]. The real arm resolves the pose
+to joints internally (the xCore controller does the IK for a MoveL); the mock has
+no kinematics, so it simulates a moving tool-centre-point pose directly. This is
+what lets a scan path (a list of probe poses) be traced without host-side IK.
 """
 
 import math
 import time
+
+
+def _quat_to_rpy(quat_xyzw):
+    """Quaternion [x, y, z, w] -> (roll, pitch, yaw) radians, XYZ intrinsic
+    convention (R = Rz @ Ry @ Rx) -- the same convention libs/path_planning
+    /frame_transform.py uses, and what the xCore CartesianPosition expects.
+    math-only so the backend stays numpy-free."""
+    x, y, z, w = quat_xyzw
+    # roll (about X)
+    roll = math.atan2(2.0 * (w * x + y * z), 1.0 - 2.0 * (x * x + y * y))
+    # pitch (about Y), clamped through the gimbal singularity
+    sinp = 2.0 * (w * y - z * x)
+    pitch = math.copysign(math.pi / 2.0, sinp) if abs(sinp) >= 1.0 else math.asin(sinp)
+    # yaw (about Z)
+    yaw = math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+    return roll, pitch, yaw
+
+
+def _rpy_to_quat(roll, pitch, yaw):
+    """(roll, pitch, yaw) radians -> quaternion [x, y, z, w], the inverse of
+    _quat_to_rpy (XYZ intrinsic). Used to report the real arm's pose as a quat."""
+    cr, sr = math.cos(roll / 2), math.sin(roll / 2)
+    cp, sp = math.cos(pitch / 2), math.sin(pitch / 2)
+    cy, sy = math.cos(yaw / 2), math.sin(yaw / 2)
+    return [
+        sr * cp * cy - cr * sp * sy,   # x
+        cr * sp * cy + sr * cp * sy,   # y
+        cr * cp * sy - sr * sp * cy,   # z
+        cr * cp * cy + sr * sp * sy,   # w
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -51,6 +89,17 @@ class MockArm:
         self._button = False         # simulated end-effector drag button
         self._sim_index = 0          # which keypad index the sim button maps to
 
+        # Cartesian tool-centre-point pose (arm base frame): position in metres,
+        # orientation as a quaternion [x, y, z, w]. The mock has no kinematics, so
+        # this pose is tracked independently of the joints -- move_pose() drives it
+        # directly so a scan path (a list of poses) can be simulated end to end.
+        self._pose_pos = [0.0, 0.0, 0.0]
+        self._pose_quat = [0.0, 0.0, 0.0, 1.0]
+        self._pose_target_pos = None
+        self._pose_target_quat = None
+        self._pose_speed_mms = 0.0   # cartesian speed for the active pose move
+        self._pose_moving = False
+
     # -- lifecycle --
     def connect(self):
         self.log("[MOCK] arm backend ready (no hardware).")
@@ -63,7 +112,7 @@ class MockArm:
         return list(self.joints)
 
     def is_moving(self):
-        return self._moving
+        return self._moving or self._pose_moving
 
     def get_status(self):
         if self.alarm:
@@ -72,7 +121,7 @@ class MockArm:
             return "drag"
         if not self.powered:
             return "off"
-        return "moving" if self._moving else "idle"
+        return "moving" if (self._moving or self._pose_moving) else "idle"
 
     def _step_toward(self, target, speed_pct, dt):
         """Move joints toward target at speed. Returns True when reached."""
@@ -107,6 +156,24 @@ class MockArm:
                     self.joints[i] = self._cyc_from[i] + (self._cyc_to[i] - self._cyc_from[i]) * f
             else:                                  # HOLD ~1.3 s (> settle dwell)
                 self.joints = list(self._cyc_to)
+            return
+        if self._pose_moving:
+            # Cartesian move: glide the TCP position toward the target at the
+            # commanded linear speed (mm/s -> m/s); snap the orientation on
+            # arrival (the mock doesn't slerp -- it only needs to demonstrate
+            # move-then-settle sequencing, not smooth rotation).
+            step_m = (self._pose_speed_mms / 1000.0) * dt
+            done = True
+            for i in range(3):
+                d = self._pose_target_pos[i] - self._pose_pos[i]
+                if abs(d) <= step_m or step_m <= 0.0:
+                    self._pose_pos[i] = self._pose_target_pos[i]
+                else:
+                    self._pose_pos[i] += math.copysign(step_m, d)
+                    done = False
+            if done:
+                self._pose_quat = list(self._pose_target_quat)
+                self._pose_moving = False
             return
         if not self._moving:
             return
@@ -145,6 +212,42 @@ class MockArm:
         self._moving = True
         return True
 
+    def move_pose(self, pos_m, quat_xyzw, speed_mms):
+        """Queue a cartesian move to a probe pose (position in metres, orientation
+        quaternion [x,y,z,w], arm base frame). Same gates as a joint move."""
+        if self.alarm:
+            self.log("[MOCK] move_pose rejected: alarm/e-stop active.")
+            return False
+        if not self.powered:
+            self.log("[MOCK] move_pose rejected: motors off.")
+            return False
+        if self.drag:
+            self.log("[MOCK] move_pose rejected: in drag mode.")
+            return False
+        if len(pos_m) != 3 or len(quat_xyzw) != 4:
+            self.log("[MOCK] move_pose rejected: need 3 position + 4 quaternion values.")
+            return False
+        self._pose_target_pos = [float(v) for v in pos_m]
+        self._pose_target_quat = [float(v) for v in quat_xyzw]
+        self._pose_speed_mms = float(speed_mms)
+        self._pose_moving = True
+        return True
+
+    def get_pose(self):
+        """Current TCP pose: (position [x,y,z] metres, quaternion [x,y,z,w])."""
+        return list(self._pose_pos), list(self._pose_quat)
+
+    def get_pose_raw(self):
+        """Mock equivalent of the controller's own pose report: the simulated
+        TCP as trans (m) + rpy (rad). For the mock, the sim IS the controller."""
+        x, y, z, w = self._pose_quat
+        # quat -> rpy (XYZ), mirror of _quat_to_rpy
+        roll = math.atan2(2.0 * (w * x + y * z), 1.0 - 2.0 * (x * x + y * y))
+        sinp = 2.0 * (w * y - z * x)
+        pitch = math.copysign(math.pi / 2.0, sinp) if abs(sinp) >= 1.0 else math.asin(sinp)
+        yaw = math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+        return {"trans": list(self._pose_pos), "rpy": [roll, pitch, yaw], "frame": "mock (sim TCP)"}
+
     def set_power(self, on):
         if on and self.alarm:
             self.log("[MOCK] cannot power on: clear the alarm first.")
@@ -152,6 +255,7 @@ class MockArm:
         self.powered = bool(on)
         if not on:
             self._moving = False
+            self._pose_moving = False
         return self.powered
 
     def set_drag(self, on):
@@ -172,6 +276,8 @@ class MockArm:
     def stop(self):
         self._moving = False
         self._target = list(self.joints)
+        self._pose_moving = False
+        self._pose_target_pos = list(self._pose_pos)
 
     # -- end-effector keypad (simulated) --
     def get_keypad(self):
@@ -304,6 +410,14 @@ class RokaeArm:
 
     def _prep(self):
         sdk, r = self.sdk, self.robot
+        # If the arm was left in drag/teach mode (manual + motors relaxed), a move
+        # can't run: exit drag FIRST, otherwise powering on + moveStart fight the
+        # hand-guide state and the arm never moves. Best-effort (no-op if not in
+        # drag). This is why "Home"/"Jog" did nothing after using "Drag".
+        try:
+            r.disableDrag(self.ec)
+        except Exception:  # noqa: BLE001
+            pass
         if not self._wait_power_on():
             raise RuntimeError("motors not powered")
         r.setMotionControlMode(sdk.MotionControlMode.NrtCommandMode, self.ec)
@@ -333,6 +447,58 @@ class RokaeArm:
             self._status = f"error:{e}"
             self.log(f"[ROKAE] move failed: {e}")
             return False
+
+    def move_pose(self, pos_m, quat_xyzw, speed_mms):
+        """Queue a cartesian linear move to a probe pose (MoveL). The xCore
+        controller resolves the pose to joints internally (nearest-solution IK,
+        set in _prep via setDefaultConfOpt(False)) -- there is no separate IK
+        call in this SDK.
+
+        Pose is arm base frame: position in METRES, orientation quaternion
+        [x,y,z,w]. CartesianPosition takes (trans[3], rpy[3]).
+
+        UNIT/CONVENTION CAVEAT: this follows the SDK signature (trans metres, rpy
+        radians, XYZ), but the exact units + rpy convention have NOT been verified
+        against a real SR5 yet. Validate at low speed with Ra + the E-stop before
+        trusting on hardware. Proven so far only against MockArm."""
+        sdk, r = self.sdk, self.robot
+        try:
+            self._prep()
+            roll, pitch, yaw = _quat_to_rpy(quat_xyzw)
+            target = sdk.CartesianPosition([float(v) for v in pos_m], [roll, pitch, yaw])
+            cmd = sdk.MoveLCommand(target, float(speed_mms))
+            r.moveAppend([cmd], sdk.PyString(), self.ec)
+            r.moveStart(self.ec)
+            self._status = "moving"
+            return True
+        except Exception as e:  # noqa: BLE001
+            self._status = f"error:{e}"
+            self.log(f"[ROKAE] move_pose failed: {e}")
+            return False
+
+    def get_pose_raw(self):
+        """The controller's OWN report of the flange pose, untouched: cartPosture
+        (flange in the BASE frame). Returns {'trans':[x,y,z] m, 'rpy':[rx,ry,rz]
+        rad, 'frame':'flangeInBase'} exactly as the SDK gives it (no frame math
+        of ours), or None if unavailable. NOTE: cartPosture REQUIRES the
+        CoordinateType argument — calling it without one raises (a latent bug in
+        the earlier get_pose, which silently returned zeros)."""
+        if not self.robot:
+            return None
+        try:
+            posture = self.robot.cartPosture(self.sdk.CoordinateType.flangeInBase, self.ec)
+            return {"trans": list(posture.trans)[:3], "rpy": list(posture.rpy)[:3],
+                    "frame": "flangeInBase"}
+        except Exception:  # noqa: BLE001
+            return None
+
+    def get_pose(self):
+        """Current TCP pose (position [x,y,z] metres, quaternion [x,y,z,w]) from
+        the controller's own report; zero pose if unavailable."""
+        raw = self.get_pose_raw()
+        if raw is None:
+            return [0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]
+        return raw["trans"], _rpy_to_quat(*raw["rpy"])
 
     def set_power(self, on):
         sdk, r = self.sdk, self.robot

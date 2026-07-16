@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>qc_moveit_config</name>
+  <version>0.1.0</version>
+  <description>QC scanning-cell MoveIt bring-up: the vendor SR5 MoveIt config with
+    the arm mounted overhead (base 1.2 m above the table, pointing down). Provides
+    qc_cell.urdf.xacro + a planning-only move_group launch used by PathPlanner.</description>
+  <maintainer email="leon.trowsdale@dexory.com">Leon Trowsdale</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <exec_depend>rokae_description</exec_depend>
+  <exec_depend>rokae_xMateSR5_moveit_config</exec_depend>
+  <exec_depend>moveit_configs_utils</exec_depend>
+  <exec_depend>moveit_ros_move_group</exec_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>joint_state_publisher</exec_depend>
+  <exec_depend>xacro</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

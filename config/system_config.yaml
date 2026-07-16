@@ -1,0 +1,70 @@
+# QC Scanner — shared system configuration (TRACKED in git).
+#
+# These are the cell-independent tunables: the same for every install of the
+# system. Read them, never hard-code them (architecture.md §6).
+#
+# Site-specific, MEASURED values (the real arm's IP, the marked-corner
+# calibration) do NOT belong here — they live in config/local_config.yaml,
+# which is git-ignored. See config/local_config.example.yaml for its shape.
+
+# --- Coverage planner (libs/path_planning) ---------------------------------
+# Defaults for the CAD -> scan-path pipeline. plan_path.py / the PathPlanner
+# node read these; the CLI flags override them per-run.
+planner:
+  standoff_mm: 250          # probe distance from the surface (decision 9: 20-30 cm)
+  max_incidence_deg: 25     # incidence-cone half-angle limit (the relaxation constraint)
+  fov_deg: 40               # scanner field of view, full angle -- PLACEHOLDER, confirm MIRACO Plus spec
+  overlap: 0.3              # required overlap between adjacent raster lines (0..1)
+  along_track_mm: 10        # waypoint spacing along a single raster line
+  face_angle_tol_deg: 30    # normal-clustering tolerance for face grouping (waypoint_generator)
+  samples: 20000            # surface sample count (density of the source point cloud)
+  mesh_size_mm: 5           # STEP tessellation target edge length
+
+# --- Frames & units (architecture.md §6) -----------------------------------
+# Part/CAD frame: millimetres, Y-up (the STEP file's own frame).
+# Arm base frame: metres, Z-up.
+# The part -> arm transform is: mm -> m, Y-up -> Z-up, PLUS the marked-corner
+# offset. The offset is the calibrated, site-specific half and lives in
+# local_config.yaml (corner_transform); the unit/axis half is fixed here.
+frames:
+  part_units: mm
+  part_up_axis: y
+  arm_units: m
+  arm_up_axis: z
+
+# --- Workspace (the restricted cell volume) ---------------------------------
+# Single source of truth for the workspace box; every consumer (main viewer,
+# debug viewport, clamps) reads THIS, never hard-codes dims.
+# Frame convention: the box's own frame has its origin at a bottom corner,
+# X = table long axis, Z = vertical, table/floor plane at Z=0. The arm base is
+# mounted UPSIDE-DOWN, centred, at the top: (X/2, Y/2, Z_top), Z pointing down.
+# This matches qc_cell.urdf.xacro's cell_mount (1.2 m above `table`, roll 180deg):
+# the `table` frame origin sits under the arm base, i.e. at workspace
+# (1000, 375, 0) mm. Reconciled, not duplicated.
+workspace:
+  dims_mm: [2000, 750, 1200]        # X x Y x Z of the restricted box
+  mount:
+    base_xyz_mm: [1000, 375, 1200]  # arm base position in the workspace frame
+    base_rpy_deg: [180, 0, 0]       # upside-down (roll 180 -> Z points down)
+  table_z_mm: 0                     # table/floor plane height
+  arm_reach_mm: 919                 # SR5 rated reach = envelope radius about the
+                                    # SHOULDER (NOT distance from the base origin:
+                                    # the base structure adds length, so the
+                                    # homed flange sits ~1259 mm from the origin).
+                                    # Informational only — reachability is judged
+                                    # by the controller's IK, not a sphere.
+
+# --- Debug viewport (shape tracing) ------------------------------------------
+debug_shapes:
+  default_size_mm: 200        # default outline size (circle dia / square side / tri edge)
+  initial_z_mm: 600           # new outlines spawn horizontal at this height above the table
+  # standoff reuses planner.standoff_mm -- do not duplicate it here.
+
+# --- Mission (TaskManager) -------------------------------------------------
+mission:
+  max_rescans: 2            # quality-fail rescans before flagging a human (decision 8)
+
+# --- Motion speeds ---------------------------------------------------------
+motion:
+  jog_speed_mms: 60         # default jog end-effector speed (mm/s)
+  scan_speed_mms: 30        # trace speed during a scan sweep -- deliberately low/safe

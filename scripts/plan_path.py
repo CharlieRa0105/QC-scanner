@@ -149,12 +149,9 @@ def build_arg_parser():
         "accurate mesh at the cost of more triangles to process",
     )
     parser.add_argument(
-        "--step-axis", type=int, default=1, choices=[0, 1, 2],
-        help="axis (0=X, 1=Y, 2=Z) raster lines are stacked along",
-    )
-    parser.add_argument(
-        "--travel-axis", type=int, default=0, choices=[0, 1, 2],
-        help="axis (0=X, 1=Y, 2=Z) the probe travels along within a line",
+        "--face-angle-tol-deg", type=float, default=30.0,
+        help="normal-clustering tolerance: samples whose normals fall within this "
+        "angle share a face group (smaller = more, tighter faces)",
     )
     parser.add_argument("--seed", type=int, default=0, help="surface-sampling RNG seed")
     return parser
@@ -193,8 +190,7 @@ def main():
         standoff_mm=args.standoff_mm,
         raster_spacing_mm=spacing,
         along_track_mm=args.along_track_mm,
-        step_axis=args.step_axis,
-        travel_axis=args.travel_axis,
+        face_angle_tol_deg=args.face_angle_tol_deg,
     )
     n_lines = 1 + max((wp.line_id for wp in waypoints), default=-1)
     print(f"      {len(waypoints)} waypoints across {n_lines} raster lines")
@@ -242,8 +238,7 @@ def main():
             "overlap": args.overlap,
             "max_incidence_deg": args.max_incidence_deg,
             "window": args.window,
-            "step_axis": args.step_axis,
-            "travel_axis": args.travel_axis,
+            "face_angle_tol_deg": args.face_angle_tol_deg,
             "samples": args.samples,
             "mesh_size_mm": args.mesh_size_mm,
             "seed": args.seed,

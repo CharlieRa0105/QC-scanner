@@ -41,7 +41,7 @@ implemented yet" state. There is **no fabricated data** in the front-end.
 | GUI area | Backed by |
 | --- | --- |
 | **Part catalogue** (Load CAD, recent parts) | **REAL** — `GET /api/parts` lists the actual CAD files in `config/cad/`. A part exists only if its STEP/STL is on disk. |
-| **Robot connection** (header status dot + IP) | **REAL** — `robot_bridge.py` connects via the arm driver (`backend/sr5_arm_driver` → `RokaeArm`) on a real xCore SDK session (`/api/robot/connect`, `/api/robot/status`). No mock: if the arm is unreachable / the SDK can't load, it stays honestly **Offline**. |
+| **Robot connection** (header status dot + IP) | **REAL** — `robot_bridge.py` connects via the arm driver (`ros2_ws/src/sr5_arm_driver` → `RokaeArm`) on a real xCore SDK session (`/api/robot/connect`, `/api/robot/status`). No mock: if the arm is unreachable / the SDK can't load, it stays honestly **Offline**. |
 | **Debug joint telemetry** | **REAL** — `/api/robot/joints` streams live `jointPos`/`jointVel`/`jointTorque`. Temperature isn't exposed by the driver → shown as `—`. |
 | **Motion control** (safety bar + Debug "Jog to targets") | **REAL** — power/drag/stop/e-stop/clear-alarm/jog drive the physical SR5 via `/api/robot/{power,drag,stop,estop,clear_alarm,move}`. Jog is an absolute point-to-point move, confirmed each time. Gated on a live connection **and** the `QC_ALLOW_MOTION` master switch. |
 | **Scan run** (Part ID → Start scan → Result) | **STUB but wired** — `POST /api/scan/start` records a real scan to the results store. Scanner capture + QC don't exist, so the record is honestly `incomplete` (null metrics, notes naming the missing subsystems). No fabricated pass/fail. |
@@ -49,8 +49,11 @@ implemented yet" state. There is **no fabricated data** in the front-end.
 
 ### Robot connection + motion (`robot_bridge.py`)
 
-The pure-Python arm backend lives in `backend/sr5_arm_driver/backends.py`
-(`RokaeArm`); no `rclpy` needed. The bridge owns the single SDK session,
+The pure-Python arm backend lives once, in the ROS 2 ArmDriver package at
+`ros2_ws/src/sr5_arm_driver/sr5_arm_driver/backends.py` (`RokaeArm`/`MockArm`);
+no `rclpy` needed. The console borrows it directly on `sys.path` (a temporary
+arrangement that retires once the ROS 2 graph owns motion). The bridge owns the
+single SDK session,
 serialises access, and exposes both reads and motion commands. Env vars:
 
 | Var | Default | Meaning |

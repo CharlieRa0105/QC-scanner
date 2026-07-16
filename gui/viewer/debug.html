@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QC Scanner — Debug Viewport</title>
+<!--
+  Debug 3D viewport (opened as a popup/modal from the console's Debugging
+  section). Same scene module as the main viewer (viewer3d.js): workspace box,
+  overhead SR5, part + path. Adds the debug tools:
+    * placeable shape outlines (circle / square / triangle) with a translate/
+      rotate gizmo and a live pose readout in ARM-BASE frame (mm / deg)
+    * "Trace" — the arm traces the selected outline (preview always; the real
+      arm only through the gated move_pose path)
+    * camera-follow — the end-effector re-aims at the orbit camera's look-at
+      point (preview; optional gated send-to-arm)
+-->
+<link rel="stylesheet" href="viewer.css">
+<style>
+  #brand { top: 14px; left: 14px; padding: 10px 14px; display: flex; align-items: center; gap: 9px; }
+  #brand .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--lime); box-shadow: 0 0 10px var(--lime); }
+  #brand b { font-size: 13px; }
+  #brand span { font-family: var(--font-mono); font-size: 11px; color: var(--ink-dim); }
+
+  #tools { top: 14px; right: 14px; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; width: 224px; }
+  #tools .row { display: flex; gap: 6px; }
+  #tools .row button { flex: 1; }
+  #shapeChips { display: flex; flex-wrap: wrap; gap: 5px; }
+  #shapeChips button { padding: 3px 9px; border-radius: 999px; border: 1px solid var(--panel-line); background: #fff; font-size: 11px; cursor: pointer; font-family: var(--font-mono); }
+  #shapeChips button.on { background: var(--lime); border-color: var(--lime); color: #08120a; font-weight: 700; }
+
+  #pose { left: 14px; bottom: 16px; padding: 10px 14px; font-family: var(--font-mono); font-size: 11.5px; line-height: 1.6; color: var(--ink); min-width: 250px; }
+  #pose .k { color: var(--ink-dim); }
+  #status { left: 50%; transform: translateX(-50%); bottom: 16px; padding: 8px 14px; font-family: var(--font-mono); font-size: 11px; color: var(--ink-dim); max-width: 46vw; }
+  #status b { color: #5c7300; }
+</style>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+
+  <div id="brand" class="panel"><span class="dot"></span><b>Debug viewport</b><span>· arm-base frame, mm</span></div>
+
+  <div id="tools" class="panel">
+    <div class="grp-label">Add outline</div>
+    <div class="row">
+      <button class="ghost" id="addCircle">◯ Circle</button>
+      <button class="ghost" id="addSquare">▢ Square</button>
+      <button class="ghost" id="addTriangle">△ Tri</button>
+    </div>
+    <div class="grp-label">Shapes</div>
+    <div id="shapeChips"><span style="font-size:11px;color:var(--ink-dim)">none yet</span></div>
+    <div class="row">
+      <div class="seg" style="flex:1" id="gizmoSeg">
+        <button data-mode="translate" class="on">Move</button>
+        <button data-mode="rotate">Rotate</button>
+      </div>
+      <button class="ghost" id="delShape" title="Delete selected">✕</button>
+    </div>
+    <div class="grp-label">Actions</div>
+    <button class="primary" id="traceBtn">Trace outline</button>
+    <div class="toggle" id="followTgl"><span>Camera-follow (preview)</span><span class="sw"></span></div>
+    <div class="toggle" id="sendTgl"><span>Send follow to arm</span><span class="sw"></span></div>
+    <div class="grp-label">Camera</div>
+    <div class="seg" id="viewSeg">
+      <button data-view="orbit" class="on">Orbit</button>
+      <button data-view="scanner">Scanner POV</button>
+    </div>
+  </div>
+
+  <div id="pose" class="panel">
+    <div><span class="k">shape&nbsp;</span><span id="poseName">—</span></div>
+    <div><span class="k">pos&nbsp;&nbsp;&nbsp;</span><span id="posePos">—</span> <span class="k">mm</span></div>
+    <div><span class="k">rot&nbsp;&nbsp;&nbsp;</span><span id="poseRot">—</span> <span class="k">deg</span></div>
+    <div><span class="k">arm tip</span> <span id="tipPos">—</span> <span class="k">mm</span></div>
+  </div>
+
+  <div id="status" class="panel">status: <b id="statusText">loading…</b></div>
+
+  <script src="vendor/three.min.js"></script>
+  <script src="vendor/OrbitControls.js"></script>
+  <script src="vendor/STLLoader.js"></script>
+  <script src="vendor/TransformControls.js"></script>
+  <script src="viewer3d.js"></script>
+  <script src="debug.js"></script>
+</body>
+</html>

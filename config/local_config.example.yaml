@@ -1,0 +1,31 @@
+# QC Scanner — SITE-SPECIFIC configuration TEMPLATE (tracked, for reference).
+#
+# Copy this file to config/local_config.yaml (which is git-ignored) and fill in
+# the values MEASURED for THIS physical cell. See architecture.md §6 + decision 5.
+#
+#     cp config/local_config.example.yaml config/local_config.yaml
+#
+# The loader (libs/qc_config.py) merges local_config.yaml on top of
+# system_config.yaml, so anything here overrides / extends the shared config.
+
+# Real arm address.
+# NOTE: today the console still reads the IP from the QC_ROBOT_IP env var
+# (backend/robot_bridge.py); this key documents the intended home. The backend
+# is not yet migrated to read config, so the env var remains authoritative.
+robot:
+  ip: "192.168.2.160"
+
+# The marked-corner -> arm-base calibration (decision 5), MEASURED ONCE for this
+# cell. It places the part's reference corner in the arm's base frame, and is
+# applied (after the fixed mm->m + Y-up->Z-up remap) to put a scan path into
+# arm coordinates.
+#
+#   translation_m : corner position in the arm base frame, metres [x, y, z]
+#   rotation_deg  : corner orientation as roll/pitch/yaw about arm X/Y/Z, degrees
+#
+# The identity below (zero translation, zero rotation) means "the marked corner
+# coincides with the arm base" -- a stand-in that lets the pipeline run end to
+# end. It is NOT a real calibration; replace it with measured values.
+corner_transform:
+  translation_m: [0.0, 0.0, 0.0]   # TODO: MEASURE — arm-base -> marked-corner offset
+  rotation_deg:  [0.0, 0.0, 0.0]   # TODO: MEASURE — marked-corner orientation vs arm base

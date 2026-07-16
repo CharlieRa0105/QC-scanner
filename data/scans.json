@@ -101,5 +101,437 @@
       "Point-cloud registration not implemented.",
       "QC quality gate not evaluated \u2014 pass/fail undetermined."
     ]
+  },
+  {
+    "scanId": "SCAN-20260715-141814",
+    "partId": "DEX05120563 B18 - Bearing press tool - Location pin small_Rev 0",
+    "startedAt": "2026-07-15T14:18:14",
+    "finishedAt": "2026-07-15T14:18:14",
+    "status": "incomplete",
+    "result": null,
+    "metrics": {
+      "meanDeviationMm": null,
+      "rmseMm": null,
+      "stdMm": null,
+      "coveragePct": null,
+      "pointCount": null
+    },
+    "toleranceMm": null,
+    "cloudFile": null,
+    "phases": [
+      {
+        "key": "execute",
+        "label": "Execute trajectory",
+        "implemented": false,
+        "status": "not_implemented"
+      },
+      {
+        "key": "capture",
+        "label": "Capture point cloud",
+        "implemented": false,
+        "status": "not_implemented"
+      },
+      {
+        "key": "register",
+        "label": "Register + merge",
+        "implemented": false,
+        "status": "not_implemented"
+      },
+      {
+        "key": "quality",
+        "label": "Quality gate",
+        "implemented": false,
+        "status": "not_implemented"
+      }
+    ],
+    "notes": [
+      "Scanner capture not implemented \u2014 no point cloud was captured.",
+      "Point-cloud registration not implemented.",
+      "QC quality gate not evaluated \u2014 pass/fail undetermined."
+    ]
+  },
+  {
+    "scanId": "SCAN-20260715-141828",
+    "partId": "DEX05120563 B18 - Bearing press tool - Location pin small_Rev 0",
+    "startedAt": "2026-07-15T14:18:28",
+    "finishedAt": "2026-07-15T14:18:28",
+    "status": "incomplete",
+    "result": null,
+    "metrics": {
+      "meanDeviationMm": null,
+      "rmseMm": null,
+      "stdMm": null,
+      "coveragePct": null,
+      "pointCount": null
+    },
+    "toleranceMm": null,
+    "cloudFile": null,
+    "phases": [
+      {
+        "key": "execute",
+        "label": "Execute trajectory",
+        "implemented": false,
+        "status": "not_implemented"
+      },
+      {
+        "key": "capture",
+        "label": "Capture point cloud",
+        "implemented": false,
+        "status": "not_implemented"
+      },
+      {
+        "key": "register",
+        "label": "Register + merge",
+        "implemented": false,
+        "status": "not_implemented"
+      },
+      {
+        "key": "quality",
+        "label": "Quality gate",
+        "implemented": false,
+        "status": "not_implemented"
+      }
+    ],
+    "notes": [
+      "Scanner capture not implemented \u2014 no point cloud was captured.",
+      "Point-cloud registration not implemented.",
+      "QC quality gate not evaluated \u2014 pass/fail undetermined."
+    ]
+  },
+  {
+    "scanId": "SCAN-20260715-141900",
+    "partId": "DEX05120563 B18 - Bearing press tool - Location pin small_Rev 0",
+    "startedAt": "2026-07-15T14:19:00",
+    "finishedAt": "2026-07-15T14:19:00",
+    "status": "incomplete",
+    "result": null,
+    "metrics": {
+      "meanDeviationMm": null,
+      "rmseMm": null,
+      "stdMm": null,
+      "coveragePct": null,
+      "pointCount": null
+    },
+    "toleranceMm": null,
+    "cloudFile": null,
+    "phases": [
+      {
+        "key": "execute",
+        "label": "Execute trajectory",
+        "implemented": false,
+        "status": "not_implemented"
+      },
+      {
+        "key": "capture",
+        "label": "Capture point cloud",
+        "implemented": false,
+        "status": "not_implemented"
+      },
+      {
+        "key": "register",
+        "label": "Register + merge",
+        "implemented": false,
+        "status": "not_implemented"
+      },
+      {
+        "key": "quality",
+        "label": "Quality gate",
+        "implemented": false,
+        "status": "not_implemented"
+      }
+    ],
+    "notes": [
+      "Scanner capture not implemented \u2014 no point cloud was captured.",
+      "Point-cloud registration not implemented.",
+      "QC quality gate not evaluated \u2014 pass/fail undetermined."
+    ]
+  },
+  {
+    "scanId": "SCAN-20260715-141924",
+    "partId": "DEX05120563 B18 - Bearing press tool - Location pin small_Rev 0",
+    "startedAt": "2026-07-15T14:19:24",
+    "finishedAt": "2026-07-15T14:19:24",
+    "status": "incomplete",
+    "result": null,
+    "metrics": {
+      "meanDeviationMm": null,
+      "rmseMm": null,
+      "stdMm": null,
+      "coveragePct": null,
+      "pointCount": null
+    },
+    "toleranceMm": null,
+    "cloudFile": null,
+    "phases": [
+      {
+        "key": "execute",
+        "label": "Execute trajectory",
+        "implemented": false,
+        "status": "not_implemented"
+      },
+      {
+        "key": "capture",
+        "label": "Capture point cloud",
+        "implemented": false,
+        "status": "not_implemented"
+      },
+      {
+        "key": "register",
+        "label": "Register + merge",
+        "implemented": false,
+        "status": "not_implemented"
+      },
+      {
+        "key": "quality",
+        "label": "Quality gate",
+        "implemented": false,
+        "status": "not_implemented"
+      }
+    ],
+    "notes": [
+      "Scanner capture not implemented \u2014 no point cloud was captured.",
+      "Point-cloud registration not implemented.",
+      "QC quality gate not evaluated \u2014 pass/fail undetermined."
+    ]
+  },
+  {
+    "scanId": "SCAN-20260715-174956",
+    "partId": "ARRI - Tower - wire sensor L bracket",
+    "startedAt": "2026-07-15T17:49:56",
+    "finishedAt": "2026-07-15T17:49:56",
+    "status": "incomplete",
+    "result": null,
+    "metrics": {
+      "meanDeviationMm": null,
+      "rmseMm": null,
+      "stdMm": null,
+      "coveragePct": null,
+      "pointCount": null
+    },
+    "toleranceMm": null,
+    "cloudFile": null,
+    "phases": [
+      {
+        "key": "execute",
+        "label": "Execute trajectory",
+        "implemented": false,
+        "status": "not_implemented"
+      },
+      {
+        "key": "capture",
+        "label": "Capture point cloud",
+        "implemented": false,
+        "status": "not_implemented"
+      },
+      {
+        "key": "register",
+        "label": "Register + merge",
+        "implemented": false,
+        "status": "not_implemented"
+      },
+      {
+        "key": "quality",
+        "label": "Quality gate",
+        "implemented": false,
+        "status": "not_implemented"
+      }
+    ],
+    "notes": [
+      "Scanner capture not implemented \u2014 no point cloud was captured.",
+      "Point-cloud registration not implemented.",
+      "QC quality gate not evaluated \u2014 pass/fail undetermined."
+    ]
+  },
+  {
+    "scanId": "SCAN-20260715-175937",
+    "partId": "DEX05120563 B18 - Bearing press tool - Location pin small_Rev 0",
+    "startedAt": "2026-07-15T17:59:37",
+    "finishedAt": "2026-07-15T17:59:37",
+    "status": "incomplete",
+    "result": null,
+    "metrics": {
+      "meanDeviationMm": null,
+      "rmseMm": null,
+      "stdMm": null,
+      "coveragePct": null,
+      "pointCount": null
+    },
+    "toleranceMm": null,
+    "cloudFile": null,
+    "phases": [
+      {
+        "key": "execute",
+        "label": "Execute trajectory",
+        "implemented": false,
+        "status": "not_implemented"
+      },
+      {
+        "key": "capture",
+        "label": "Capture point cloud",
+        "implemented": false,
+        "status": "not_implemented"
+      },
+      {
+        "key": "register",
+        "label": "Register + merge",
+        "implemented": false,
+        "status": "not_implemented"
+      },
+      {
+        "key": "quality",
+        "label": "Quality gate",
+        "implemented": false,
+        "status": "not_implemented"
+      }
+    ],
+    "notes": [
+      "Scanner capture not implemented \u2014 no point cloud was captured.",
+      "Point-cloud registration not implemented.",
+      "QC quality gate not evaluated \u2014 pass/fail undetermined."
+    ]
+  },
+  {
+    "scanId": "SCAN-20260715-180129",
+    "partId": "ARRI - Tower - wire sensor L bracket",
+    "startedAt": "2026-07-15T18:01:29",
+    "finishedAt": "2026-07-15T18:01:29",
+    "status": "incomplete",
+    "result": null,
+    "metrics": {
+      "meanDeviationMm": null,
+      "rmseMm": null,
+      "stdMm": null,
+      "coveragePct": null,
+      "pointCount": null
+    },
+    "toleranceMm": null,
+    "cloudFile": null,
+    "phases": [
+      {
+        "key": "execute",
+        "label": "Execute trajectory",
+        "implemented": false,
+        "status": "not_implemented"
+      },
+      {
+        "key": "capture",
+        "label": "Capture point cloud",
+        "implemented": false,
+        "status": "not_implemented"
+      },
+      {
+        "key": "register",
+        "label": "Register + merge",
+        "implemented": false,
+        "status": "not_implemented"
+      },
+      {
+        "key": "quality",
+        "label": "Quality gate",
+        "implemented": false,
+        "status": "not_implemented"
+      }
+    ],
+    "notes": [
+      "Scanner capture not implemented \u2014 no point cloud was captured.",
+      "Point-cloud registration not implemented.",
+      "QC quality gate not evaluated \u2014 pass/fail undetermined."
+    ]
+  },
+  {
+    "scanId": "SCAN-20260715-180352",
+    "partId": "ARRI - Tower - wire sensor L bracket",
+    "startedAt": "2026-07-15T18:03:52",
+    "finishedAt": "2026-07-15T18:03:52",
+    "status": "incomplete",
+    "result": null,
+    "metrics": {
+      "meanDeviationMm": null,
+      "rmseMm": null,
+      "stdMm": null,
+      "coveragePct": null,
+      "pointCount": null
+    },
+    "toleranceMm": null,
+    "cloudFile": null,
+    "phases": [
+      {
+        "key": "execute",
+        "label": "Execute trajectory",
+        "implemented": false,
+        "status": "not_implemented"
+      },
+      {
+        "key": "capture",
+        "label": "Capture point cloud",
+        "implemented": false,
+        "status": "not_implemented"
+      },
+      {
+        "key": "register",
+        "label": "Register + merge",
+        "implemented": false,
+        "status": "not_implemented"
+      },
+      {
+        "key": "quality",
+        "label": "Quality gate",
+        "implemented": false,
+        "status": "not_implemented"
+      }
+    ],
+    "notes": [
+      "Scanner capture not implemented \u2014 no point cloud was captured.",
+      "Point-cloud registration not implemented.",
+      "QC quality gate not evaluated \u2014 pass/fail undetermined."
+    ]
+  },
+  {
+    "scanId": "SCAN-20260715-184507",
+    "partId": "ARRI - Tower - wire sensor L bracket",
+    "startedAt": "2026-07-15T18:45:07",
+    "finishedAt": "2026-07-15T18:45:07",
+    "status": "incomplete",
+    "result": null,
+    "metrics": {
+      "meanDeviationMm": null,
+      "rmseMm": null,
+      "stdMm": null,
+      "coveragePct": null,
+      "pointCount": null
+    },
+    "toleranceMm": null,
+    "cloudFile": null,
+    "phases": [
+      {
+        "key": "execute",
+        "label": "Execute trajectory",
+        "implemented": false,
+        "status": "not_implemented"
+      },
+      {
+        "key": "capture",
+        "label": "Capture point cloud",
+        "implemented": false,
+        "status": "not_implemented"
+      },
+      {
+        "key": "register",
+        "label": "Register + merge",
+        "implemented": false,
+        "status": "not_implemented"
+      },
+      {
+        "key": "quality",
+        "label": "Quality gate",
+        "implemented": false,
+        "status": "not_implemented"
+      }
+    ],
+    "notes": [
+      "Scanner capture not implemented \u2014 no point cloud was captured.",
+      "Point-cloud registration not implemented.",
+      "QC quality gate not evaluated \u2014 pass/fail undetermined."
+    ]
   }
 ]

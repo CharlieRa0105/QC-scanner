@@ -55,6 +55,8 @@
         <div style="font-size:11px;color:rgba(255,255,255,.5)">{{ connLabel }}</div>
         <input value="{{ ip }}" onInput="{{ setIp }}" spellcheck="false" style="width:110px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.14);border-radius:4px;padding:1px 6px;font-size:12px;font-family:var(--font-mono);color:#fff;outline:none" style-focus="border-color:var(--color-lime-500)" />
       </div>
+      <button onClick="{{ robotConnect }}" style="height:26px;padding:0 10px;border:0;border-radius:5px;background:var(--color-lime-500);color:#000;font-size:11px;font-weight:700;cursor:pointer;font-family:var(--font-sans)">Connect</button>
+      <button onClick="{{ robotDisconnect }}" style="height:26px;padding:0 10px;border:1px solid rgba(255,255,255,.2);border-radius:5px;background:transparent;color:rgba(255,255,255,.8);font-size:11px;font-weight:700;cursor:pointer;font-family:var(--font-sans)">Disconnect</button>
     </div>
 
     <!-- machine state pill -->
@@ -152,6 +154,7 @@
                 <button onClick="{{ confirmPlaced }}" style="{{ primaryBtn }}">Part is placed — continue
                   <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><use href="assets/icons.svg#chevron-right"/></svg>
                 </button>
+                <button onClick="{{ backToLoad }}" style="{{ secondaryBtn }}">← Back to CAD selection</button>
               </div>
             </sc-if>
 
@@ -179,6 +182,7 @@
                 <button onClick="{{ sendToRobot }}" style="{{ primaryBtn }}">Confirm &amp; start scan
                   <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><use href="assets/icons.svg#lightning"/></svg>
                 </button>
+                <button onClick="{{ backToPlace }}" style="{{ secondaryBtn }}">← Back to placement</button>
               </div>
             </sc-if>
 
@@ -293,6 +297,11 @@
             <button onClick="{{ home }}" style="{{ dockBtn }}"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><use href="assets/icons.svg#home"/></svg>Home</button>
           </div>
         </div>
+        <!-- VIEWPORT: the new 3D scan-path viewer (gui/viewer/), part + path +
+             scanner-POV + orbit nav. Loads /api/viewer_bundle. -->
+        <div style="flex:1;min-width:0;min-height:0;position:relative;background:#0b1017">
+          <iframe src="{{ viewerSrc }}" title="Scan path 3D viewer" style="width:100%;height:100%;border:0;display:block"></iframe>
+        </div>
       </div>
     </sc-if>
 
@@ -321,29 +330,13 @@
                 <svg width="28" height="28" fill="none" stroke="var(--color-charcoal-400)" stroke-width="2"><use href="assets/icons.svg#bar-chart"/></svg>
               </div>
               <div>
-                <h2 class="ds" style="font-size:22px">No scans recorded yet</h2>
-                <p class="ds" style="color:var(--color-charcoal-600);margin-top:8px;font-size:14px;max-width:460px">Run a scan from the Run tab and it will appear here.</p>
+                <h2 class="ds" style="font-size:22px">No scan metrics yet</h2>
+                <p class="ds" style="color:var(--color-charcoal-600);margin-top:8px;font-size:14px;max-width:460px">QC metrics appear here once scanner capture and the quality gate are implemented.</p>
               </div>
             </div>
           </sc-if>
-
-          <!-- RECORDED SCANS (real, from /api/scans) -->
-          <sc-if value="{{ hasScans }}" hint-placeholder-val="{{ false }}">
-            <div style="border:1px solid var(--color-charcoal-100);background:#fff">
-              <div style="padding:14px 18px;border-bottom:1px solid var(--color-charcoal-100);font-weight:700;font-size:15px;display:flex;align-items:center;gap:8px">Recorded scans<span style="font-family:var(--font-mono);font-size:12px;color:var(--color-charcoal-500);font-weight:400">{{ scanCount }} total</span></div>
-              <div style="display:grid;grid-template-columns:190px 1fr 180px 110px;gap:0;padding:10px 18px;font-size:11px;font-weight:700;color:var(--color-charcoal-500);border-bottom:1px solid var(--color-charcoal-100);letter-spacing:.02em">
-                <span>SCAN ID</span><span>PART</span><span>STARTED</span><span style="text-align:right">STATUS</span>
-              </div>
-              <sc-for list="{{ scansRows }}" as="r" hint-placeholder-count="6">
-                <div style="display:grid;grid-template-columns:190px 1fr 180px 110px;gap:0;padding:12px 18px;align-items:center;border-bottom:1px solid var(--color-charcoal-100)">
-                  <span style="font-family:var(--font-mono);font-size:12px;font-weight:600">{{ r.scanId }}</span>
-                  <span style="font-size:13px;color:var(--color-charcoal-700)">{{ r.part }}</span>
-                  <span style="font-family:var(--font-mono);font-size:11px;color:var(--color-charcoal-500)">{{ r.started }}</span>
-                  <span style="display:flex;justify-content:flex-end"><span style="display:inline-flex;align-items:center;gap:5px;background:{{ r.badgeBg }};color:{{ r.badgeFg }};padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700"><span style="width:5px;height:5px;border-radius:50%;background:{{ r.badgeFg }}"></span>{{ r.status }}</span></span>
-                </div>
-              </sc-for>
-            </div>
-          </sc-if>
+          <!-- (The recorded-scans history panel was removed by request; the
+               results store + /api/scans API remain intact.) -->
         </div>
       </div>
     </sc-if>
@@ -356,12 +349,34 @@
             <h1 class="ds" style="font-size:22px">Debug &amp; diagnostics</h1>
           </div>
 
+          <!-- debugging tools: the 3D debug viewport popup -->
+          <div style="border:1px solid var(--color-charcoal-100);background:#fff">
+            <div style="padding:12px 16px;display:flex;align-items:center;gap:10px">
+              <span style="font-weight:700;font-size:14px">Debugging</span>
+              <span style="font-size:11px;font-family:var(--font-mono);color:var(--color-charcoal-500)">3D viewport · shape tracing · camera-follow</span>
+              <button onClick="{{ openDebugViewport }}" style="margin-left:auto;height:32px;padding:0 14px;border:0;border-radius:6px;background:#000;color:#fff;font-size:12px;font-weight:700;cursor:pointer;font-family:var(--font-sans)">Open 3D debug viewport</button>
+            </div>
+          </div>
+
+          <!-- the popup itself: a modal with the debug viewport iframe. Closing
+               removes the iframe entirely, so its WebGL context is released. -->
+          <sc-if value="{{ debugViewportOpen }}" hint-placeholder-val="{{ false }}">
+            <div style="position:fixed;inset:0;background:rgba(10,14,20,.55);z-index:60;display:flex;align-items:center;justify-content:center;padding:34px">
+              <div style="position:relative;width:100%;height:100%;max-width:1500px;background:#eef1f4;border-radius:12px;overflow:hidden;box-shadow:0 24px 80px rgba(0,0,0,.4)">
+                <button onClick="{{ closeDebugViewport }}" style="position:absolute;top:12px;left:50%;transform:translateX(-50%);z-index:5;height:32px;padding:0 16px;border:0;border-radius:6px;background:#000;color:#fff;font-size:12px;font-weight:700;cursor:pointer;font-family:var(--font-sans)">Close viewport</button>
+                <iframe src="viewer/debug.html" title="Debug 3D viewport" style="width:100%;height:100%;border:0;display:block"></iframe>
+              </div>
+            </div>
+          </sc-if>
+
           <!-- joint states -->
           <div style="border:1px solid var(--color-charcoal-100);background:#fff">
             <div style="padding:12px 16px;border-bottom:1px solid var(--color-charcoal-100);display:flex;align-items:center;gap:8px">
               <span style="font-weight:700;font-size:14px">Joint states</span>
               <span style="font-size:11px;font-family:var(--font-mono);color:var(--color-charcoal-500)">live from /api/robot/joints</span>
               <span style="margin-left:auto;font-size:11px;color:var(--color-charcoal-500)">position is live · slider/field set a target, then Jog</span>
+              <label style="margin-left:12px;display:flex;align-items:center;gap:5px;font-size:11px;color:var(--color-charcoal-500);font-weight:600" title="End-effector speed for jog, home and the scan-path trace">speed
+                <input type="number" min="1" max="250" step="1" value="{{ motionSpeed }}" onInput="{{ setMotionSpeed }}" style="width:62px;height:32px;padding:0 6px;border:1px solid var(--color-charcoal-200);border-radius:5px;font-family:var(--font-mono);font-size:12px;font-weight:600;text-align:right;outline:none" />mm/s</label>
               <button onClick="{{ jogToTargets }}" style="margin-left:12px;display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 14px;border:0;border-radius:6px;background:#000;color:#fff;font-size:12px;font-weight:700;cursor:pointer;font-family:var(--font-sans)"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><use href="assets/icons.svg#lightning"/></svg>Jog to targets</button>
             </div>
             <div style="display:grid;grid-template-columns:150px 1fr 118px 66px 62px 54px;gap:0;padding:9px 16px;font-size:10.5px;font-weight:700;color:var(--color-charcoal-500);border-bottom:1px solid var(--color-charcoal-100);letter-spacing:.02em">
@@ -385,6 +400,54 @@
                 <span style="font-family:var(--font-mono);font-size:12px;text-align:right;color:var(--color-charcoal-500)">{{ j.t }}</span>
               </div>
             </sc-for>
+          </div>
+
+          <!-- controller-reported TCP: the arm's OWN pose numbers, raw from the
+               SDK (cartPosture) — ground truth vs the software's frame math -->
+          <div style="border:1px solid var(--color-charcoal-100);background:#fff">
+            <div style="padding:12px 16px;display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+              <span style="font-weight:700;font-size:14px">Robot head — controller-reported</span>
+              <span style="font-size:11px;font-family:var(--font-mono);color:var(--color-charcoal-500)">raw SDK cartPosture · {{ tcpFrame }} · live</span>
+              <span style="margin-left:auto;display:flex;align-items:center;gap:16px;font-family:var(--font-mono);font-size:13px;font-weight:600">
+                <span><span style="color:var(--color-charcoal-500);font-size:11px;font-weight:700">XYZ&nbsp;</span>{{ tcpXyz }} <span style="color:var(--color-charcoal-500);font-size:11px">mm</span></span>
+                <span><span style="color:var(--color-charcoal-500);font-size:11px;font-weight:700">RPY&nbsp;</span>{{ tcpRpy }} <span style="color:var(--color-charcoal-500);font-size:11px">deg</span></span>
+              </span>
+            </div>
+          </div>
+
+          <!-- go to point: type an XYZ target (arm-base frame, mm), arm moves there -->
+          <div style="border:1px solid var(--color-charcoal-100);background:#fff">
+            <div style="padding:12px 16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+              <span style="font-weight:700;font-size:14px">Go to point</span>
+              <span style="font-size:11px;font-family:var(--font-mono);color:var(--color-charcoal-500)">controller base frame, mm (matches the readout above) · translation only</span>
+              <span style="margin-left:auto;display:flex;align-items:center;gap:8px">
+                <label style="display:flex;align-items:center;gap:4px;font-size:11px;font-weight:600;color:var(--color-charcoal-500)">X
+                  <input type="number" step="10" value="{{ gotoX }}" onInput="{{ setGotoX }}" style="width:76px;height:32px;padding:0 6px;border:1px solid var(--color-charcoal-200);border-radius:5px;font-family:var(--font-mono);font-size:12px;font-weight:600;text-align:right;outline:none" /></label>
+                <label style="display:flex;align-items:center;gap:4px;font-size:11px;font-weight:600;color:var(--color-charcoal-500)">Y
+                  <input type="number" step="10" value="{{ gotoY }}" onInput="{{ setGotoY }}" style="width:76px;height:32px;padding:0 6px;border:1px solid var(--color-charcoal-200);border-radius:5px;font-family:var(--font-mono);font-size:12px;font-weight:600;text-align:right;outline:none" /></label>
+                <label style="display:flex;align-items:center;gap:4px;font-size:11px;font-weight:600;color:var(--color-charcoal-500)">Z
+                  <input type="number" step="10" value="{{ gotoZ }}" onInput="{{ setGotoZ }}" style="width:76px;height:32px;padding:0 6px;border:1px solid var(--color-charcoal-200);border-radius:5px;font-family:var(--font-mono);font-size:12px;font-weight:600;text-align:right;outline:none" /></label>
+                <button onClick="{{ goToPoint }}" style="height:32px;padding:0 14px;border:0;border-radius:6px;background:#000;color:#fff;font-size:12px;font-weight:700;cursor:pointer;font-family:var(--font-sans)">Go to point</button>
+              </span>
+            </div>
+            <div style="padding:0 16px 12px;font-size:11px;color:var(--color-charcoal-500)">Same frame as the readout above (homed ≈ 0, 135, 1259 mm). Reachability is decided by the controller — an unreachable target comes back as an arm error in the log, nothing is faked.</div>
+          </div>
+
+          <!-- send to robot: trace the generated (arm-frame) scan path -->
+          <div style="border:1px solid var(--color-charcoal-100);background:#fff">
+            <div style="padding:12px 16px;border-bottom:1px solid var(--color-charcoal-100);display:flex;align-items:center;gap:10px">
+              <span style="font-weight:700;font-size:14px">Scan path</span>
+              <span style="font-size:11px;font-family:var(--font-mono);color:var(--color-charcoal-500)">arm-frame poses → /api/robot/follow_path</span>
+              <span style="margin-left:auto;font-family:var(--font-mono);font-size:12px;color:var(--color-charcoal-500)">{{ traceLabel }}</span>
+              <button onClick="{{ traceScanPath }}" style="display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 14px;border:0;border-radius:6px;background:#000;color:#fff;font-size:12px;font-weight:700;cursor:pointer;font-family:var(--font-sans)"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><use href="assets/icons.svg#lightning"/></svg>Send to robot</button>
+              <button onClick="{{ stopTrace }}" style="height:32px;padding:0 14px;border:1px solid var(--color-charcoal-200);border-radius:6px;background:#fff;color:#000;font-size:12px;font-weight:700;cursor:pointer;font-family:var(--font-sans)">Stop</button>
+            </div>
+            <div style="padding:12px 16px">
+              <div style="height:6px;background:var(--color-charcoal-100);border-radius:3px;overflow:hidden">
+                <div style="{{ traceBarStyle }}"></div>
+              </div>
+              <div style="margin-top:8px;font-size:11px;color:var(--color-charcoal-500)">Streams the arm-frame scan path (data/scanpath_arm.json) to the arm, pose by pose, settling between each. Motion is gated on connection + QC_ALLOW_MOTION + an operator confirm. On the real SR5, keep the E-stop in reach.</div>
+            </div>
           </div>
 
           <!-- log stream -->
@@ -474,6 +537,18 @@ class Component extends DCLogic {
       railPos:'—',
       aTab:'dashboard', selScan:0, histPart:0,
       joints:JOINTS0, logs:LOGS0, logFilter:'all',
+      // "Send to robot" path trace (demo slice). traceLabel / traceBarStyle are
+      // pre-formatted strings so the template binds whole attributes only.
+      traceRunning:false, traceLabel:'idle',
+      motionSpeed:60,   // ONE end-effector speed (mm/s) for all Debug motion: jog, home, trace
+      viewerNonce:0,    // bump to force the 3D preview iframe to reload after re-planning
+      debugViewportOpen:false,   // the Debugging section's 3D popup
+      // "Go to point" (Debug tab): target in the CONTROLLER BASE frame, mm —
+      // the SAME frame the "Robot head — controller-reported" strip shows, so
+      // you can validate commanded-vs-reported 1:1. Default sits near the homed
+      // pose (0,135,1259) so the first move is small + reachable.
+      gotoX:0, gotoY:135, gotoZ:1150,
+      traceBarStyle:'height:100%;width:0%;background:var(--color-lime-500);transition:width .2s',
     };
     this._logSeq=1;
   }
@@ -486,6 +561,9 @@ class Component extends DCLogic {
       const d=new Date();
       this.setState({clock:d.toTimeString().slice(0,8)});
     },1000);
+    // Workspace config (mount height etc.) for the go-to conversion — single
+    // source of truth is config/system_config.yaml via /api/config.
+    fetch('/api/config').then(r=>r.json()).then(d=>{ this._CFG=(d&&d.config)||{}; }).catch(()=>{ this._CFG={}; });
     // Real robot connection: attempt to connect on start, then poll live
     // status (every 2s) and — while the Debug tab is open — live joint state
     // (every ~1s). Replaces the previous fabricated joint telemetry.
@@ -504,7 +582,7 @@ class Component extends DCLogic {
       const parts = (d && d.ok && Array.isArray(d.parts)) ? d.parts : [];
       this.PARTS = parts;
       if(parts.length){
-        this.setState(s=>({partId: s.partId || parts[0].id}));
+        // No default selection — the operator explicitly picks a part (Load step).
         this._log('info','app', parts.length+' part'+(parts.length===1?'':'s')+' available in config/cad');
       } else {
         this._log('warn','app','No CAD files found in config/cad — add a STEP file to plan a part');
@@ -546,6 +624,14 @@ class Component extends DCLogic {
       this.setState({connected:false, robotKind:null, robotNote:String(e)});
       this._log('error','arm',`Connect request failed: ${e}`);
     }
+  };
+  _robotDisconnect=async ()=>{
+    try{
+      const s = await (await fetch('/api/robot/disconnect',{method:'POST',
+        headers:{'Content-Type':'application/json'}, body:'{}'})).json();
+      this._applyStatus(s);
+      this._log('info','arm','Disconnected from arm');
+    }catch(e){ this._log('error','arm',`Disconnect failed: ${e}`); }
   };
   _pollStatus=async ()=>{
     try{
@@ -591,6 +677,8 @@ class Component extends DCLogic {
       // for a few seconds instead of snapping it back to the live read, so a
       // target being dialled in isn't overwritten before "Jog" is pressed.
       // Velocity/torque telemetry always updates.
+      // controller-reported flange pose (raw SDK cartPosture) for the debug strip
+      if('tcp' in d) this._tcpRaw = d.tcp;
       const holding = this._jointHold && performance.now() < this._jointHold;
       // Map live arm joints (6) onto the display rows by index; extra rows
       // (e.g. the rail) are left untouched.
@@ -607,40 +695,134 @@ class Component extends DCLogic {
     clearInterval(this._tick);
     clearInterval(this._statusTick);
     clearInterval(this._jointTick);
+    clearInterval(this._traceTick);
+    clearInterval(this._scanTraceTick);
     clearTimeout(this._ipT);
   }
   componentDidUpdate(){}
 
   // ---------- flow ----------
   // ---- flow (order: load CAD -> place -> part ID -> preview -> scan -> result) ----
-  // STEP 1: pick which CAD to load (from the recent list) or upload a file.
-  chooseCad=(part)=>this.setState({matched:part, partId:part.id});
-  // STEP 1 -> 2: CAD chosen, move on to placing the part. Default to the first
-  // known part if the operator didn't explicitly pick one.
-  cadReady=()=>this.setState({matched:this.state.matched||this.PARTS[0]||null, stage:'place'});
-  onFile=(e)=>{
+  // STEP 1: pick which CAD to load (from the library) or upload a file. Picking
+  // a part regenerates its scan path (backend planner) and reloads the preview.
+  chooseCad=(part)=>{ this.setState({matched:part, partId:part.id}); this._planPart(part.id); };
+  // STEP 1 -> 2: require an explicit part choice (no default part).
+  cadReady=()=>{
+    if(!this.state.matched){ this._log('warn','app','Pick or load a CAD first'); return; }
+    this.setState({stage:'place'});
+  };
+  onFile=async (e)=>{
     const f=e.target.files&&e.target.files[0]; if(!f) return;
-    const name=f.name;
-    this.setState({matched:{...(this.state.matched||this.PARTS[0]||{}),file:name}});
+    const name=f.name, id=name.replace(/\.[^.]+$/,'');
+    this._log('info','app','Uploading '+name+' …');
+    try{
+      const r=await (await fetch('/api/parts/upload?name='+encodeURIComponent(name),
+        {method:'POST', body:await f.arrayBuffer()})).json();
+      if(!r.ok){ this._log('error','app','Upload failed — '+(r.error||'unknown')); return; }
+      this.setState({matched:{id, short:name, file:name}, partId:id});
+      await this._loadParts();
+      this._planPart(id);
+    }catch(err){ this._log('error','app','Upload failed: '+err); }
+  };
+  // Generate the scan path for a part via the backend planner, then reload the
+  // 3D preview (bump the iframe nonce). This is what makes picking/importing a
+  // part actually change the path + part shown.
+  _planPart=async (partId)=>{
+    if(!partId) return;
+    this._log('info','plan','Generating scan path for '+partId+' …');
+    try{
+      const r=await (await fetch('/api/plan',{method:'POST',
+        headers:{'Content-Type':'application/json'}, body:JSON.stringify({partId})})).json();
+      if(!r.ok){ this._log('warn','plan','Plan failed — '+(r.error||'unknown')); return; }
+      this._log('info','plan',`Path generated — ${r.waypoints} waypoints`);
+      this.setState(s=>({viewerNonce:(s.viewerNonce||0)+1}));   // reload the preview
+    }catch(e){ this._log('error','plan','Plan request failed: '+e); }
   };
   // STEP 2 -> 3: part is on the table, go confirm its ID.
   confirmPlaced=()=>this.setState({stage:'identify'});
+  // Wizard BACK navigation (Task 8): step back without losing entered data —
+  // matched / partId / everything else lives in state and is never cleared here.
+  backToLoad=()=>this.setState({stage:'load'});
+  backToPlace=()=>this.setState({stage:'place'});
+  // Debugging popup (3D debug viewport, gui/viewer/debug.html in a modal).
+  openDebugViewport=()=>this.setState({debugViewportOpen:true});
+  closeDebugViewport=()=>this.setState({debugViewportOpen:false});
+
+  // ---------- "Go to point" (Debug tab) ----------
+  // Operator types a target in the CONTROLLER BASE frame mm (what the readout
+  // strip shows). We express it through the table frame the API speaks —
+  // p_table = (x/1000, -y/1000, (H - z)/1000), H = mount height from /api/config
+  // — and POST /api/robot/move_pose. The backend converts table->base with the
+  // SAME H, so the two conversions cancel and the arm is commanded at exactly
+  // the (x,y,z) base-frame point you typed (validate it against the readout).
+  // Translation only: orientation is the homed "tool aligned with base"
+  // (table-frame quat [1,0,0,0] -> base-frame identity). Reachability is the
+  // controller's call — an unreachable target returns an arm error, no fake sphere.
+  _setGoto=(k)=>(e)=>{ const v=parseFloat(e.target.value); if(!Number.isNaN(v)) this.setState({[k]:v}); };
+  goToPoint=async ()=>{
+    if(!this.state.connected){ this._log('warn','arm','Go-to ignored — arm not connected'); return; }
+    const {gotoX:x, gotoY:y, gotoZ:z} = this.state;
+    const H = ((this._CFG&&this._CFG.workspace&&this._CFG.workspace.mount&&this._CFG.workspace.mount.base_xyz_mm)||[1000,375,1200])[2];
+    if(!window.confirm(`Send the arm to arm-frame point [${x}, ${y}, ${z}] mm at ${this.state.motionSpeed} mm/s?\nThe arm will MOVE. Ensure the cell is clear and the E-stop is in reach.`)) return;
+    const position=[x/1000, -y/1000, (H - z)/1000];       // arm mm -> table m
+    await this._motion('move_pose', {position, quaternion:[1,0,0,0], speedMms:this.state.motionSpeed},
+                       `Go to [${x}, ${y}, ${z}] mm (arm frame) @ ${this.state.motionSpeed} mm/s`);
+  };
   onPartInput=(e)=>this.setState({partId:e.target.value});
-  scanId=()=>{ this.setState({partId:(this.state.matched&&this.state.matched.id)||(this.PARTS[0]&&this.PARTS[0].id)||''}); };
+  scanId=()=>{ this.setState({partId:(this.state.matched&&this.state.matched.id)||''}); };
   // Run the scan via the real backend (POST /api/scan/start). The
   // pipeline is a stub -- scanner capture + QC don't exist yet -- so it returns
   // an honest 'incomplete' record (persisted to the results store) rather than
   // a fabricated pass. We show that record on the Result step and refresh the
   // Analytics list. No fake progress animation.
+  // "Confirm & start scan" = SEND TO ROBOT: stream the planned scan path to the
+  // arm (it physically traces it), then record the scan. Gated on an operator
+  // confirm here; the backend re-checks connection + QC_ALLOW_MOTION + (on the
+  // real arm) QC_ALLOW_SCAN_TRACE. Progress drives the scanning ring; on
+  // completion the scan is recorded and we advance to Result.
   sendToRobot=async ()=>{
     if(this.state.scanBusy) return;
+    if(!window.confirm('Send the scan path to the arm and start the scan?\nThe arm will MOVE. Ensure the cell is clear and the E-stop is in reach.')) return;
     this.setState({scanBusy:true, stage:'pass1', passNum:1, progress:0, scanRec:null});
-    this._log('info','scan','Scan requested for '+(this.state.partId||'(no part)'));
+    this._log('info','scan','Send to robot for '+(this.state.partId||'(no part)'));
+    try{
+      const t = await (await fetch('/api/robot/follow_path',{method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({confirm:true, speedMms:this.state.motionSpeed})})).json();
+      if(!t.ok || !t.started){
+        this._log('warn','arm','Send to robot refused — '+(t.error||'unknown'));
+        alert('Arm did not start:\n'+(t.error||'unknown'));
+        this.setState({scanBusy:false, stage:'identify'});
+        return;
+      }
+      this._log('info','arm',`Tracing scan path — ${t.total} waypoints`);
+      this._pollScanTrace();
+    }catch(e){
+      this._log('error','arm','Send to robot failed: '+e);
+      this.setState({scanBusy:false, stage:'identify'});
+    }
+  };
+  // Poll the arm trace; drive the scanning-stage progress, then record the scan.
+  _pollScanTrace=()=>{
+    clearInterval(this._scanTraceTick);
+    this._scanTraceTick = setInterval(async ()=>{
+      try{
+        const s = await (await fetch('/api/robot/follow_status')).json();
+        this.setState({progress: s.total ? Math.round(100*s.completed/s.total) : 0});
+        if(!s.running){
+          clearInterval(this._scanTraceTick);
+          if(s.aborted){ this._log('warn','arm','Trace aborted'); this.setState({scanBusy:false, stage:'identify'}); return; }
+          if(!s.ok){ this._log('error','arm','Trace failed — '+(s.error||'unknown')); this.setState({scanBusy:false, stage:'identify'}); return; }
+          this._log('info','arm',`Trace complete — ${s.completed}/${s.total} waypoints`);
+          this._recordScan();
+        }
+      }catch(e){ /* transient */ }
+    }, 400);
+  };
+  _recordScan=async ()=>{
     try{
       const r = await (await fetch('/api/scan/start',{method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({partId:this.state.partId})})).json();
-      if(!r.ok) throw new Error(r.error||'scan could not start');
+        headers:{'Content-Type':'application/json'}, body: JSON.stringify({partId:this.state.partId})})).json();
       const rec=(r.status&&r.status.record)||null;
       if(rec){
         this._log('info','scan','Scan '+rec.scanId+' recorded · status '+rec.status);
@@ -650,12 +832,11 @@ class Component extends DCLogic {
       this._loadScans();
     }catch(e){
       this.setState({scanBusy:false, stage:'identify'});
-      this._log('error','scan','Scan failed: '+e);
-      alert('Scan failed:\n'+e);
+      this._log('error','scan','Scan record failed: '+e);
     }
   };
   viewInAnalytics=()=>this.setState({tab:'analytics',aTab:'dashboard'});
-  newPart=()=>{ this.setState({stage:'load',partId:(this.PARTS[0]&&this.PARTS[0].id)||'',matched:null,progress:0,result:null,passNum:1,attempts:0,scanRec:null}); };
+  newPart=()=>{ this.setState({stage:'load',partId:'',matched:null,progress:0,result:null,passNum:1,attempts:0,scanRec:null}); };
 
   // ---------- motion (drives the physical SR5 via backend /api/robot/*) ----------
   // One helper for every motion command: POST, merge the returned real status
@@ -681,7 +862,7 @@ class Component extends DCLogic {
   home=async ()=>{
     if(!this.state.connected){ this._log('warn','arm','Home ignored — arm not connected'); return; }
     if(!window.confirm('Move the arm to the home pose (all six joints to 0°)?\nEnsure the cell is clear.')) return;
-    await this._motion('move',{joints:[0,0,0,0,0,0]}, 'Homing — moving to all-zero joint pose');
+    await this._motion('move',{joints:[0,0,0,0,0,0], speedMms:this.state.motionSpeed}, 'Homing — moving to all-zero joint pose');
     this.setState({homed:true});
   };
   toggleSoft=async ()=>{
@@ -704,8 +885,54 @@ class Component extends DCLogic {
     if(!this.state.connected){ this._log('warn','arm','Jog ignored — arm not connected'); return; }
     const armJoints=this.state.joints.filter(j=>j.u==='°').slice(0,6).map(j=>+(+j.v).toFixed(2));
     if(!window.confirm('Jog the arm to the commanded joint angles?\n['+armJoints.join(', ')+'] °\nEnsure the cell is clear.')) return;
-    await this._motion('move',{joints:armJoints}, 'Jog → ['+armJoints.join(', ')+']°');
+    await this._motion('move',{joints:armJoints, speedMms:this.state.motionSpeed}, 'Jog → ['+armJoints.join(', ')+']° @ '+this.state.motionSpeed+'mm/s');
   };
+
+  // ---------- "Send to robot": trace the generated scan path (demo slice) ----
+  // POSTs to /api/robot/follow_path; the backend streams the arm-frame poses to
+  // the arm (mock, or the real SR5 with Ra present + E-stop). Gated on a live
+  // connection + an operator confirm here; the backend re-checks QC_ALLOW_MOTION
+  // + power. Progress is polled from /api/robot/follow_status. This is the
+  // demo-slice execute path; the real one is /mission/execute over rosbridge.
+  _setTrace=(done,total,running)=>{
+    const pct = total ? Math.round(100*done/total) : 0;
+    this.setState({traceRunning:running,
+      traceLabel: running ? `tracing ${done}/${total}` : (total?`${done}/${total}`:'idle'),
+      traceBarStyle:`height:100%;width:${pct}%;background:var(--color-lime-500);transition:width .2s`});
+  };
+  // Shared end-effector speed in mm/s (sent to the backend as speedMms by jog,
+  // home, and the scan-path trace). Ignores NaN so a partially-typed value
+  // doesn't blow the field away mid-keystroke.
+  setMotionSpeed=(e)=>{ const v=parseFloat(e.target.value); if(!Number.isNaN(v)) this.setState({motionSpeed:v}); };
+  traceScanPath=async ()=>{
+    if(!this.state.connected){ this._log('warn','arm','Send to robot ignored — arm not connected'); return; }
+    if(this.state.traceRunning){ this._log('warn','arm','A path is already tracing'); return; }
+    if(!window.confirm('Send the scan path to the arm and trace it?\nThe arm will MOVE. Ensure the cell is clear and the E-stop is in reach.')) return;
+    try{
+      const r = await (await fetch('/api/robot/follow_path',{method:'POST',
+        headers:{'Content-Type':'application/json'}, body: JSON.stringify({confirm:true, speedMms:this.state.motionSpeed})})).json();
+      if(!r.ok || !r.started){ this._log('warn','arm','Send to robot refused — '+(r.error||'unknown')); return; }
+      this._log('info','arm',`Tracing scan path — ${r.total} waypoints (source: ${r.source||'path'})`);
+      this._setTrace(0, r.total, true);
+      this._pollTrace();
+    }catch(e){ this._log('error','arm','Send to robot failed: '+e); }
+  };
+  _pollTrace=()=>{
+    clearInterval(this._traceTick);
+    this._traceTick = setInterval(async ()=>{
+      try{
+        const s = await (await fetch('/api/robot/follow_status')).json();
+        this._setTrace(s.completed||0, s.total||0, !!s.running);
+        if(!s.running){
+          clearInterval(this._traceTick);
+          if(s.aborted) this._log('warn','arm',`Path trace aborted at ${s.completed}/${s.total}`);
+          else if(s.ok) this._log('info','arm',`Path trace complete — ${s.completed}/${s.total} waypoints`);
+          else this._log('error','arm',`Path trace failed at ${s.completed}/${s.total} — ${s.error||'unknown'}`);
+        }
+      }catch(e){ /* transient */ }
+    }, 400);
+  };
+  stopTrace=async ()=>{ await this._motion('stop',{}, 'Stop — path trace + motion halted'); };
 
   goRun=()=>this.setState({tab:'run'});
   goAnalytics=()=>this.setState({tab:'analytics'});
@@ -769,6 +996,25 @@ class Component extends DCLogic {
       joints, logs, jogToTargets:this.jogToTargets,
       logAllPill:fpill(s.logFilter==='all'),logInfoPill:fpill(s.logFilter==='info'),logWarnPill:fpill(s.logFilter==='warn'),logErrorPill:fpill(s.logFilter==='error'),
       setLogAll:()=>this.setLogFilter('all'),setLogInfo:()=>this.setLogFilter('info'),setLogWarn:()=>this.setLogFilter('warn'),setLogError:()=>this.setLogFilter('error'),
+      // "Send to robot" scan-path trace (T6). Handlers + pre-formatted display
+      // strings, exposed to the template the same way as the controls above.
+      traceScanPath:this.traceScanPath, stopTrace:this.stopTrace,
+      traceLabel:s.traceLabel, traceBarStyle:s.traceBarStyle,
+      motionSpeed:s.motionSpeed, setMotionSpeed:this.setMotionSpeed,
+      viewerSrc:'viewer/index.html?n='+(s.viewerNonce||0),
+      // Debugging popup (3D debug viewport)
+      debugViewportOpen:s.debugViewportOpen,
+      openDebugViewport:this.openDebugViewport, closeDebugViewport:this.closeDebugViewport,
+      // go-to-point (arm-base frame, mm)
+      gotoX:s.gotoX, gotoY:s.gotoY, gotoZ:s.gotoZ,
+      setGotoX:this._setGoto('gotoX'), setGotoY:this._setGoto('gotoY'), setGotoZ:this._setGoto('gotoZ'),
+      goToPoint:this.goToPoint,
+      gotoHint:(((this._CFG||{}).workspace||{}).mount ? (this._CFG.workspace.mount.base_xyz_mm[2]+' mm above the table') : '1200 mm above the table'),
+      // controller-reported TCP (raw SDK cartPosture; NOT our frame math).
+      // trans arrives in metres, rpy in radians — shown as mm / deg.
+      tcpXyz: this._tcpRaw ? this._tcpRaw.trans.map(v=>(v*1000).toFixed(1)).join('  ') : '—',
+      tcpRpy: this._tcpRaw ? this._tcpRaw.rpy.map(v=>(v*180/Math.PI).toFixed(1)).join('  ') : '—',
+      tcpFrame: this._tcpRaw ? this._tcpRaw.frame : 'no report',
     };
   }
 
@@ -808,7 +1054,7 @@ class Component extends DCLogic {
 
     // Run layout: a single centred flow column (the embedded 3D viewer was
     // removed with scan-path planning, so there is no side viewport).
-    const runRootStyle='display:flex;justify-content:center;height:100%;';
+    const runRootStyle='display:flex;height:100%;';
     const flowStyle='width:100%;max-width:560px;flex:none;display:flex;flex-direction:column;background:#fff;border-left:1px solid var(--color-charcoal-100);border-right:1px solid var(--color-charcoal-100);min-height:0;';
 
     // ---- result (driven by the real scan record from the backend) ----
@@ -843,8 +1089,9 @@ class Component extends DCLogic {
       clock:s.clock,
       // safety bar
       connDot:s.connected?'var(--color-lime-500)':'#DA1E28',
-      connLabel:s.connected?(s.robotKind==='mock'?'Connected · mock':'Connected'):'Offline',
+      connLabel:s.connected?'Connected':'Offline',
       ip:s.ip, setIp:this.setIp,
+      robotConnect:this._robotConnect, robotDisconnect:this._robotDisconnect,
       stateLabel,stateFg,stateDot,stateBg,stateBorder,stateAnim,
       showBarProgress:scanning, progressPct,
       motorsBg:s.motorsOn?'rgba(195,239,0,.16)':'transparent', motorsFg:s.motorsOn?'var(--color-lime-500)':'rgba(255,255,255,.6)',
@@ -863,6 +1110,7 @@ class Component extends DCLogic {
       stScanning:scanning,stResult:stage==='result',
       // handlers
       chooseCad:this.chooseCad, cadReady:this.cadReady, confirmPlaced:this.confirmPlaced,
+      backToLoad:this.backToLoad, backToPlace:this.backToPlace,
       onPartInput:this.onPartInput, scanId:this.scanId,
       onFile:this.onFile, sendToRobot:this.sendToRobot,
       viewInAnalytics:this.viewInAnalytics, newPart:this.newPart,

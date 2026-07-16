@@ -3,11 +3,11 @@
 Wire contract (all standard message types -- no custom interfaces):
 
   Publishes:
-    /armPos   sensor_msgs/JointState    live joint angles (rad), ~20 Hz
+    /arm/joint_states   sensor_msgs/JointState    live joint angles (rad), ~20 Hz
     /arm/status         std_msgs/String           'idle'|'moving'|'drag'|'off'|'error:..'
 
   Subscribes:
-    /armCMD    std_msgs/Float64MultiArray  data = [j1..jN, speed_pct]
+    /arm/command    std_msgs/Float64MultiArray  data = [j1..jN, speed_pct]
                                                      (radians; speed_pct optional, default 100)
 
   Services:
@@ -79,13 +79,13 @@ class ArmDriver(Node):
         self._prev_keypad = [False] * 7
 
         # publishers
-        self.pub_js = self.create_publisher(JointState, "/armPos", 10)
+        self.pub_js = self.create_publisher(JointState, "/arm/joint_states", 10)
         self.pub_status = self.create_publisher(String, "/arm/status", 10)
         self.pub_button = self.create_publisher(Bool, "/arm/drag_button", 10)
         self.pub_backend = self.create_publisher(String, "/arm/backend", 10)
 
         # command + connection subscribers
-        self.create_subscription(Float64MultiArray, "/armCMD", self._on_move, 10)
+        self.create_subscription(Float64MultiArray, "/arm/command", self._on_move, 10)
         # payload = robot IP to connect the real arm; empty string = disconnect -> mock
         self.create_subscription(String, "/arm/connect", self._on_connect, 10)
 
@@ -185,7 +185,7 @@ class ArmDriver(Node):
         data = list(msg.data)
         n = len(self.joint_names)
         if len(data) < n:
-            self.get_logger().warn(f"/armCMD needs >= {n} values")
+            self.get_logger().warn(f"/arm/command needs >= {n} values")
             return
         target = data[:n]
         speed = data[n] if len(data) > n else 100.0

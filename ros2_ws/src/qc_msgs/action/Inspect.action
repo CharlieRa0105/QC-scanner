@@ -1,0 +1,9 @@
+# Run Phase-2 inspection on a captured cloud. Served by InspectionNode.
+# (goal / result / feedback separated by '---'.)
+string cloud_path
+string part_id
+---
+InspectionResult result
+---
+string stage          # e.g. "extract", "clean", "quality", "register", "deviation"
+float32 progress      # 0.0 .. 1.0

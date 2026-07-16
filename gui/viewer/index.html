@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QC Scanner — Path Viewer</title>
+<!--
+  3D scan-path viewport for the QC Scanner console. Renders the PART, the
+  generated SCAN PATH (from the project's own planner, via /api/viewer_bundle),
+  and lets the operator orbit in 3D, play the path, and switch to the scanner's
+  point of view. Themed to match the console (Dexory charcoal + lime).
+
+  Built from scratch on three.js (vendored). It shares NO code with the removed
+  scanpath-visualizer. The robot arm + trajectory playback are added in phase 2.
+-->
+<link rel="stylesheet" href="viewer.css">
+<style>
+  /* page-specific layout only — the shared theme lives in viewer.css */
+  /* top-left title */
+  #brand { top: 14px; left: 14px; padding: 10px 14px; display: flex; align-items: center; gap: 9px; }
+  #brand .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--lime); box-shadow: 0 0 10px var(--lime); }
+  #brand b { font-size: 13px; letter-spacing: .02em; }
+  #brand span { font-family: var(--font-mono); font-size: 11px; color: var(--ink-dim); }
+
+  /* bottom transport bar */
+  #transport { left: 50%; transform: translateX(-50%); bottom: 16px; padding: 10px 14px;
+    display: flex; align-items: center; gap: 12px; }
+  #transport button {
+    height: 34px; padding: 0 14px; border: 0; border-radius: 7px; cursor: pointer;
+    font-family: var(--font-sans); font-size: 12px; font-weight: 700; color: #08120a; background: var(--lime);
+  }
+  #transport button.ghost { background: transparent; color: var(--ink); border: 1px solid var(--panel-line); }
+  #transport input[type=range] { width: 240px; accent-color: var(--lime); cursor: pointer; }
+  #transport .wpt { font-family: var(--font-mono); font-size: 12px; color: var(--ink-dim); min-width: 84px; }
+
+  /* right-side layer + view controls */
+  #controls { top: 14px; right: 14px; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; width: 190px; }
+  #controls .grp-label { font-size: 10px; font-weight: 700; letter-spacing: .08em; color: var(--ink-dim); text-transform: uppercase; }
+
+  #status { left: 14px; bottom: 16px; padding: 7px 12px; font-family: var(--font-mono); font-size: 11px; color: var(--ink-dim); }
+  #status b { color: #5c7300; font-weight: 700; }   /* dark lime — readable on light */
+</style>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+
+  <div id="brand" class="panel">
+    <span class="dot"></span>
+    <b>Scan path</b><span id="brandSub">· preview</span>
+  </div>
+
+  <div id="controls" class="panel">
+    <div class="grp-label">Camera</div>
+    <div class="seg" id="viewSeg">
+      <button data-view="orbit" class="on">Orbit</button>
+      <button data-view="scanner">Scanner POV</button>
+    </div>
+    <div class="grp-label" style="margin-top:2px">Layers</div>
+    <div class="toggle on" data-layer="part"><span>Part</span><span class="sw"></span></div>
+    <div class="toggle on" data-layer="path"><span>Path</span><span class="sw"></span></div>
+    <div class="toggle on" data-layer="targets"><span>Aim rays</span><span class="sw"></span></div>
+    <div class="toggle on" data-layer="arm"><span>Robot arm</span><span class="sw"></span></div>
+    <div class="toggle on" data-layer="table"><span>Table + grid</span><span class="sw"></span></div>
+  </div>
+
+  <div id="transport" class="panel">
+    <button id="playBtn">▶ Play</button>
+    <button id="resetBtn" class="ghost">Reset</button>
+    <input type="range" id="scrub" min="0" max="100" value="0" step="0.1">
+    <span class="wpt" id="wptLabel">— / —</span>
+  </div>
+
+  <div id="status" class="panel">status: <b id="statusText">loading…</b></div>
+
+  <script src="vendor/three.min.js"></script>
+  <script src="vendor/OrbitControls.js"></script>
+  <script src="vendor/STLLoader.js"></script>
+  <script src="viewer3d.js"></script>
+  <script src="viewer.js"></script>
+</body>
+</html>

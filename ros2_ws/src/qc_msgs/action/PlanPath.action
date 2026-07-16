@@ -1,0 +1,11 @@
+# Generate a coverage path + collision-free trajectory for a part.
+# Served by PathPlanner. (goal / result / feedback separated by '---'.)
+string part_id
+---
+bool success
+moveit_msgs/RobotTrajectory trajectory   # collision-free joint trajectory
+ScanPath scanpath                         # the coverage path (for preview)
+string message
+---
+string stage                              # e.g. "loading cad", "moveit"
+float32 progress                          # 0.0 .. 1.0

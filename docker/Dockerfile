@@ -19,6 +19,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
         ros-humble-moveit \
         ros-humble-ros2-control \
         ros-humble-ros2-controllers \
+        ros-humble-rosbridge-suite \
     && rm -rf /var/lib/apt/lists/*
 
 # Source ROS2 for every interactive shell.

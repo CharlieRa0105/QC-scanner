@@ -57,6 +57,31 @@ from pathlib import Path
 REPO_ROOT = Path(os.environ.get("QC_BASE_DIR") or Path(__file__).resolve().parent.parent)
 GUI_DIR = REPO_ROOT / "gui"
 CAD_DIR = REPO_ROOT / "config" / "cad"
+DATA_DIR = REPO_ROOT / "data"
+# Pre-generated ARM-FRAME scan path streamed by "Send to robot" when the request
+# carries no waypoints of its own. Produced offline by the CLI (plan_path.py ->
+# scanpath_convert.py) -- planning is NOT done in this backend (refactor-guide
+# §2.4; it returns inside the PathPlanner ROS 2 node). This is a demo-slice
+# stand-in until the console requests a plan over rosbridge.
+SCANPATH_FILE = DATA_DIR / "scanpath_arm.json"
+# Bundle (part mesh + scan path + mount, table frame) for the 3D viewer
+# (gui/viewer/), produced by scripts/export_viewer_bundle.py. Served at
+# GET /api/viewer_bundle.
+VIEWER_BUNDLE_FILE = DATA_DIR / "viewer_bundle.json"
+
+
+def _load_qc_config():
+    """Merged YAML config for the UI (workspace box, planner defaults, debug
+    shapes). Uses libs/qc_config (PyYAML) when available; the backend itself
+    stays servable without it -- on any failure we return {} and the viewers
+    fall back to their built-in defaults rather than dying."""
+    try:
+        sys.path.insert(0, str(REPO_ROOT))
+        from libs.qc_config import load_config
+        return load_config()
+    except Exception as e:  # noqa: BLE001
+        print(f"[qc-backend] config unavailable ({e}); serving empty config", file=sys.stderr)
+        return {}
 
 # Real SR5 connection layer (xCore SDK). Lives in this backend dir;
 # robot_bridge.py owns the single connection + serialises SDK access, and
@@ -127,6 +152,22 @@ class QCRequestHandler(SimpleHTTPRequestHandler):
         if route == "/api/robot/joints":
             self._send_json(200, ROBOT.joints())
             return
+        if route == "/api/robot/follow_status":
+            self._send_json(200, ROBOT.follow_status())
+            return
+        # Merged system+local config (workspace box, planner + debug defaults).
+        if route == "/api/config":
+            self._send_json(200, {"ok": True, "config": _load_qc_config()})
+            return
+        # Part mesh + scan path + mount (table frame) for the 3D viewer.
+        if route == "/api/viewer_bundle":
+            try:
+                with open(VIEWER_BUNDLE_FILE) as f:
+                    self._send_json(200, json.load(f))
+            except FileNotFoundError:
+                self._send_json(404, {"ok": False,
+                                      "error": f"no {VIEWER_BUNDLE_FILE.name} — run scripts/export_viewer_bundle.py"})
+            return
         # ---- part catalogue (real CAD files on disk) ----
         if route == "/api/parts":
             self._send_json(200, {"ok": True, "parts": list_parts()})
@@ -152,15 +193,82 @@ class QCRequestHandler(SimpleHTTPRequestHandler):
             self.path = "/Scan Cell Console.dc.html"
         return super().do_GET()
 
+    def _handle_upload(self, raw):
+        """Save an uploaded CAD file (raw bytes) into config/cad/ so it joins the
+        part catalogue. Filename comes from the ?name= query param."""
+        from urllib.parse import parse_qs, urlparse
+        name = (parse_qs(urlparse(self.path).query).get("name") or [""])[0]
+        fn = os.path.basename(name)
+        ext = os.path.splitext(fn)[1].lower()
+        if ext not in (".step", ".stp", ".stl", ".obj"):
+            self._send_json(400, {"ok": False, "error": f"unsupported CAD type {ext!r}"})
+            return
+        if not raw:
+            self._send_json(400, {"ok": False, "error": "empty upload"})
+            return
+        CAD_DIR.mkdir(parents=True, exist_ok=True)
+        with open(CAD_DIR / fn, "wb") as f:
+            f.write(raw)
+        self._send_json(200, {"ok": True, "file": fn})
+
+    def _handle_plan(self, part_id):
+        """Regenerate the scan path + viewer bundle for a part by running the
+        existing planner CLIs as subprocesses (no planner code in this backend;
+        planning belongs in the PathPlanner ROS node -- this is the demo slice)."""
+        if not part_id:
+            self._send_json(400, {"ok": False, "error": "partId required"})
+            return
+        cad = next((p for p in sorted(CAD_DIR.iterdir())
+                    if p.stem == part_id and p.suffix.lower() in (".step", ".stp", ".stl", ".obj")), None)
+        if cad is None:
+            self._send_json(404, {"ok": False, "error": f"no CAD for part {part_id!r}"})
+            return
+        import subprocess
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        part_json = DATA_DIR / "_plan_part.json"
+        steps = [
+            [sys.executable, "scripts/plan_path.py", str(cad), str(part_json)],
+            [sys.executable, "scripts/scanpath_convert.py", str(part_json), str(SCANPATH_FILE)],
+            [sys.executable, "scripts/export_viewer_bundle.py", str(cad), str(SCANPATH_FILE), str(VIEWER_BUNDLE_FILE)],
+        ]
+        for cmd in steps:
+            try:
+                r = subprocess.run(cmd, cwd=str(REPO_ROOT), capture_output=True, text=True, timeout=180)
+            except Exception as e:  # noqa: BLE001
+                self._send_json(500, {"ok": False, "error": f"planner error: {e}"})
+                return
+            if r.returncode != 0:
+                tail = (r.stderr or r.stdout or "").strip()[-300:]
+                self._send_json(500, {"ok": False, "error": f"{os.path.basename(cmd[1])} failed: {tail}"})
+                return
+        try:
+            with open(VIEWER_BUNDLE_FILE) as f:
+                n = len(json.load(f).get("waypoints", []))
+        except Exception:  # noqa: BLE001
+            n = 0
+        self._send_json(200, {"ok": True, "partId": part_id, "waypoints": n})
+
     def do_POST(self):
         route = self.path.split("?")[0]
-        # Read the JSON body once (all POST routes take one, possibly empty).
+        length = int(self.headers.get("Content-Length", 0))
+        raw = self.rfile.read(length) if length else b""
+
+        # ---- CAD upload (binary body, handled before JSON parsing) ----
+        if route == "/api/parts/upload":
+            self._handle_upload(raw)
+            return
+
+        # All other POST routes take a JSON body (possibly empty).
         try:
-            length = int(self.headers.get("Content-Length", 0))
-            raw = self.rfile.read(length) if length else b"{}"
             payload = json.loads(raw or b"{}")
         except (ValueError, json.JSONDecodeError) as e:
             self._send_json(400, {"ok": False, "error": f"bad request body: {e}"})
+            return
+
+        # ---- (re)generate a scan path for a part (demo-slice: subprocess the
+        # existing planner CLIs; no planner code runs in this stdlib backend) ----
+        if route == "/api/plan":
+            self._handle_plan(payload.get("partId", ""))
             return
 
         # ---- robot connect / disconnect ----
@@ -200,6 +308,63 @@ class QCRequestHandler(SimpleHTTPRequestHandler):
                                       "error": str(e)})
             return
 
+        # ---- single cartesian pose (debug viewport: camera-follow / re-aim) ----
+        # Same gating as path tracing: connection + QC_ALLOW_MOTION, and on the
+        # REAL arm also QC_ALLOW_SCAN_TRACE (unvalidated MoveL). Mock is free.
+        if route == "/api/robot/move_pose":
+            try:
+                result = ROBOT.move_pose_once(
+                    payload.get("position"), payload.get("quaternion"),
+                    payload.get("speedMms"))
+                self._send_json(200, result)
+            except Exception as e:  # noqa: BLE001
+                traceback.print_exc()
+                self._send_json(500, {"ok": False, "action": "move_pose", "error": str(e)})
+            return
+
+        # ---- "Send to robot": stream a scan path to the arm (demo slice) ----
+        # Traces a sequence of cartesian probe poses (ARM frame). Gated on an
+        # explicit operator confirm here, plus connection + QC_ALLOW_MOTION in
+        # the bridge. Runs in a worker thread; the UI polls /follow_status and
+        # can abort via /stop. Waypoints come from the body, or (if absent) the
+        # pre-generated SCANPATH_FILE.
+        if route == "/api/robot/follow_path":
+            if not payload.get("confirm"):
+                self._send_json(400, {"ok": False,
+                                      "error": "operator confirm required (confirm=true)"})
+                return
+            waypoints = payload.get("waypoints")
+            source = "request body"
+            if not waypoints:
+                try:
+                    with open(SCANPATH_FILE) as f:
+                        sp = json.load(f)
+                    waypoints = sp.get("waypoints", [])
+                    source = SCANPATH_FILE.name
+                    if sp.get("units") != "m":
+                        # Poses must already be in arm units (metres). Refuse a
+                        # part-frame path rather than drive the arm in millimetres.
+                        self._send_json(400, {"ok": False,
+                            "error": f"{SCANPATH_FILE.name} is not in arm frame "
+                                     f"(units={sp.get('units')!r}); run scanpath_convert.py first"})
+                        return
+                except FileNotFoundError:
+                    self._send_json(400, {"ok": False,
+                        "error": f"no waypoints in body and no {SCANPATH_FILE.name} on server "
+                                 "(generate one with plan_path.py + scanpath_convert.py)"})
+                    return
+            if not waypoints:
+                self._send_json(400, {"ok": False, "error": "no waypoints to follow"})
+                return
+            result = ROBOT.start_follow_path(
+                waypoints,
+                speed_mms=payload.get("speedMms"),
+                settle_s=payload.get("settleS", 0.3),
+            )
+            result["source"] = source
+            self._send_json(200, result)
+            return
+
         # ---- scan lifecycle ----
         if route == "/api/scan/start":
             self._send_json(200, SCANS.start(payload.get("partId", "")))
@@ -210,6 +375,13 @@ class QCRequestHandler(SimpleHTTPRequestHandler):
 
         # Unknown POST endpoint.
         self._send_json(404, {"ok": False, "error": "unknown endpoint"})
+
+    def end_headers(self):
+        # Dev server: never let the browser cache the GUI files. Stale caches
+        # were masking live edits during development (an old broken build kept
+        # rendering after the source was fixed). Applies to static + API alike.
+        self.send_header("Cache-Control", "no-store, must-revalidate")
+        super().end_headers()
 
     def log_message(self, fmt, *args):
         # Terse one-line access log to stderr (default is noisy).
