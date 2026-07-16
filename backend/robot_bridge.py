@@ -67,12 +67,26 @@ SDK_ROOT = _resolve_sdk_root()
 # Master motion switch. Any value other than 0/false/no leaves motion enabled.
 ALLOW_MOTION = os.environ.get("QC_ALLOW_MOTION", "1").lower() not in ("0", "false", "no", "")
 DEFAULT_JOG_SPEED = float(os.environ.get("QC_JOG_SPEED", "60"))  # mm/s end-effector
-# The part is registered at the FIXED origin (0,0,0 = arm base, table frame) --
-# NOT relative to the live pose (that drifted). The scan is an OVERHEAD X-raster:
-# a grid ABOVE the part footprint, sweeping X, stepping Y (boustrophedon), the
-# scanner looking straight DOWN at the part from `standoff` above its top.
+# The scan is an OVERHEAD X-raster: a grid ABOVE the part footprint, sweeping X,
+# stepping Y (boustrophedon), the scanner looking straight DOWN at the part from
+# `standoff` above its top.
+#
+# WHERE the footprint sits matters as much as its shape. The arm is mounted
+# UPSIDE-DOWN, centred over the table (config: base at workspace centre, roll
+# 180). The table origin (0,0,0) sits DIRECTLY under the base -- which is the
+# arm's own singular column: a point on the J1 axis, ~0.95 m straight down. A
+# read-only calcIk sweep found 0/25 footprint poses reachable there. The same
+# footprint anchored at the HOME flange projection + 150 mm X is 25/25. So the
+# raster is anchored at (home flange -> table) + QC_SCAN_OFFSET_M, NOT at origin.
+# The offset stands in for the not-yet-measured marked-corner calibration
+# (config corner_transform, still identity); replace both once that is measured.
 RASTER_STEP_M = float(os.environ.get("QC_RASTER_STEP_M", "0.01"))   # grid spacing (X & Y rows)
 STANDOFF_M = float(os.environ.get("QC_STANDOFF_M", "0.25"))         # 200-300 mm working distance
+# Footprint anchor offset from the home flange's table projection, metres [x,y,z].
+# Default +150 mm X puts the raster in the arm's reachable sweet spot (verified
+# 25/25 via read-only calcIk); z tunes the scan plane height above the standoff.
+SCAN_OFFSET_M = tuple(float(v) for v in
+                      os.environ.get("QC_SCAN_OFFSET_M", "0.15,0.0,0.0").split(","))
 # Cartesian scan-path tracing (follow_path -> MoveL) uses the still-UNVALIDATED
 # pose units/rpy convention, so it is DISABLED on the real arm by default. Prove
 # move_pose at low speed with Ra + the E-stop first, then set QC_ALLOW_SCAN_TRACE=1
@@ -733,12 +747,27 @@ class RobotBridge:
             return _mv3(self._fb2er[0], n_fb)
         return n_fb
 
-    def _build_scan_poses(self, waypoints, orient_rpy):
-        """Build the scan as an OVERHEAD X-RASTER over the part footprint, part
-        CENTRED on the fixed origin (0,0,0 = arm base, table frame) -- NOT relative
-        to the live pose (which drifted).
+    def _scan_anchor_table(self):
+        """Where the scan footprint is centred, in the TABLE frame: the arm's HOME
+        flange position projected to the table, plus SCAN_OFFSET_M. Anchoring to
+        home (not origin) keeps the raster in the reachable envelope -- origin sits
+        on the arm's singular column (see SCAN_OFFSET_M note). Falls back to the
+        raw offset from origin if the home pose can't be read."""
+        base = [0.0, 0.0, 0.0]
+        try:
+            er = self._arm.get_pose_raw()
+            if er and er.get("trans") is not None:
+                base = self._er_to_scene(er["trans"])
+        except Exception:  # noqa: BLE001
+            self._blog("[bridge] scan anchor: could not read home pose -- offset from origin")
+        return [base[0] + SCAN_OFFSET_M[0], base[1] + SCAN_OFFSET_M[1], base[2]]
 
-        Take the part's surface points (planner targets), centre them on the origin
+    def _build_scan_poses(self, waypoints, orient_rpy):
+        """Build the scan as an OVERHEAD X-RASTER over the part footprint, the
+        footprint CENTRED at the scan anchor (home flange -> table + SCAN_OFFSET_M),
+        NOT at origin -- origin is the arm's singular column (0/25 reachable).
+
+        Take the part's surface points (planner targets), centre them on the anchor
         and apply orient_rpy (the viewer flips). Over the resulting XY footprint lay
         a regular grid: sweep +X, step Y, sweep -X, ... (boustrophedon). Each grid
         node is a scan pose STANDOFF above the part top, the tool looking straight
@@ -747,10 +776,11 @@ class RobotBridge:
         pts = [[float(v) for v in (wp.get("target") or wp.get("position"))] for wp in waypoints]
         C = [sum(t[i] for t in pts) / len(pts) for i in range(3)]      # centroid (table)
         oriented = [_mv3(R, [t[i] - C[i] for i in range(3)]) for t in pts]   # centred + oriented
+        ax, ay, _ = self._scan_anchor_table()                         # footprint anchor (table)
         xs = [p[0] for p in oriented]; ys = [p[1] for p in oriented]; zs = [p[2] for p in oriented]
         xmin, xmax = min(xs), max(xs)
         ymin, ymax = min(ys), max(ys)
-        scan_z = max(zs) + STANDOFF_M                                  # above the part top
+        scan_z = max(zs) + STANDOFF_M + SCAN_OFFSET_M[2]              # above the part top
         # aim straight down at the part: tool +Z = table up (scanner looks down -Z)
         aim_rpy = _R_to_rpy(_look_along_z(_vnorm(self._dir_table_to_er([0, 0, 1]))))
 
@@ -768,9 +798,10 @@ class RobotBridge:
             if row % 2 == 1:
                 xline = xline[::-1]                                    # boustrophedon
             for x in xline:
-                poses.append((self._endinref_point([x, y, scan_z]), aim_rpy, row))
+                poses.append((self._endinref_point([ax + x, ay + y, scan_z]), aim_rpy, row))
         cols = len(poses) // max(1, len(rowsY))
-        self._blog(f"[bridge] scan poses: OVERHEAD X-raster at origin (0,0,0 arm base), "
+        self._blog(f"[bridge] scan poses: OVERHEAD X-raster anchored at table "
+                   f"({ax*1000:.0f},{ay*1000:.0f})mm (home+offset), "
                    f"footprint x[{xmin*1000:.0f},{xmax*1000:.0f}] y[{ymin*1000:.0f},{ymax*1000:.0f}]mm, "
                    f"{len(rowsY)} rows x ~{cols} cols = {len(poses)} pts, standoff {STANDOFF_M*1000:.0f}mm, "
                    f"orient_rpy_deg={[round(math.degrees(a),1) for a in orient_rpy]}")
@@ -814,8 +845,9 @@ class RobotBridge:
         return [p_fb[0], -p_fb[1], MOUNT_H - p_fb[2]]   # fb->scene (involution)
 
     def scan_preview(self, waypoints, orient_rpy=(0.0, 0.0, 0.0), incidence_deg=10.0):
-        """NO MOTION. Register the scan path for `orient_rpy` (anchor home-0.15z,
-        aim at part) and report each pose's reachability (calcIk within the cone),
+        """NO MOTION. Register the scan path for `orient_rpy` (footprint anchored at
+        home flange -> table + SCAN_OFFSET_M, aim straight down at the part) and
+        report each pose's reachability (calcIk within the cone),
         returned in the VIEWER scene frame so 'Generate path' can draw exactly what
         would run. {ok, poses:[{position,target,reachable}], n, n_reachable}."""
         with self._lock:
@@ -874,7 +906,8 @@ class RobotBridge:
                    orient_rpy=(0.0, 0.0, 0.0), reach_timeout_s=60.0, tick_s=0.1,
                    on_progress=None):
         """CONTINUOUS oriented scan, REGISTERED to the assumed part placement
-        (centroid at home + (0,0,-150mm), rotated by orient_rpy). Each scan LINE
+        (footprint anchored at home flange -> table + SCAN_OFFSET_M, standoff above,
+        rotated by orient_rpy). Each scan LINE
         (line_id) runs as ONE blended MoveL sweep -- the head flows through it
         without stopping, the tool aiming at the part within +/- incidence_deg the
         whole way. Between lines the arm repositions with a MoveJ. Returns {ok,
