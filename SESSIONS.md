@@ -11,7 +11,30 @@ fresh Claude session) can see how the code got to its current state.
 
 ---
 
-## Current state — resume here (as of 2026-07-15, on top of `73ec017`)
+## Current state — resume here (as of 2026-07-16, on top of `2eb3499`)
+
+**Real-arm Cartesian motion works** ("Go to point"). The whole fix + the working
+recipe + the error-code cheat sheet are in `docs/session-logs/2026-07-16.md` —
+read that first. TL;DR of what makes Cartesian moves go on the SR5:
+- Read/command in **`endInRef`** (not `flangeInBase`); operator types
+  controller-frame mm matching the readout, no table↔base conversion for go-to.
+- **Pre-flight** every target with `model().calcIk` + `checkPath` (NO motion);
+  reject singular/unreachable before dispatch.
+- `setDefaultConfOpt(False)` + copy current `confData` as a SOFT bias (never force
+  `True` → accept-but-don't-move). Confirm motion via `operationState`.
+- MoveJ = point-to-point; MoveL = straight line (stricter, needs clean path).
+- **Path tracing now works end to end.** `follow_path(position_only=True)` traces
+  waypoint POSITIONS via the go-to machinery (orientation searched per point +
+  MoveJ fallback). Wired into all send paths (debug viewport, "Send to robot",
+  "Confirm & start scan"). The frame gap is closed: at connect the backend
+  self-calibrates **flangeInBase→endInRef** (reads current pose in both frames),
+  and `follow_path` does table→flangeInBase→endInRef before commanding — before
+  this, positive-z flangeInBase targets were rejected and "nothing moved".
+- **Open (next):** orientation-aware scanning (head follows surface AND aims at the
+  part), vs the current position-only trace. 3D viewport rendering issues deferred.
+  Marked-corner offset in `scanpath_arm.json` may need calibrating to the real part.
+- MoveL singularity avoidance (`setAvoidSingularity`) is opt-in via
+  `QC_ROBOT_CLASS=xMateRobot QC_AVOID_SINGULARITY=1` (off by default).
 
 **Everything below is UNCOMMITTED working-tree changes.** Nothing has been
 committed or pushed (that's Ra's call). `git status` shows the full surface:

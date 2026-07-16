@@ -1,14 +1,14 @@
 {
-  "note": "SR5 kinematic chain (from rokae_description URDF) + the overhead mount. Joint rpy are all zero; only the mount carries roll = pi (arm points down). Lengths in metres; meshes in mm (scale 0.001).",
+  "note": "SR5 kinematic chain (nominal rokae_description URDF offsets, so the STL meshes join up with NO visual gap). These offsets drive ONLY the viewer's visual + preview IK -- real-arm commands go through the controller's own IK, never this chain. The 2026-07-16 calibration found link1 was ~28mm short in Z (0.328->0.3572) to match the controller flange to ~1.5mm; that correction lives in data/frame_calibration.json (and verify_frame_match.py) and is NOT applied here, because lifting link1 by 28mm separates the rigid base/J1 meshes (a floating gap). Joint rpy are all zero. The overhead mount (base height from config workspace.mount.base_xyz_mm[2], roll pi) is applied by the viewer, NOT here. Lengths in metres; meshes in mm (scale 0.001). Orientation convention rpy XYZ (R=Rz*Ry*Rx).",
   "mount": { "xyz": [0, 0, 1.2], "rpy": [3.141592653589793, 0, 0] },
   "config": [0, 0, 0, 0, 0, 0],
   "links": [
-    { "mesh": "xMateSR5_base.stl",  "xyz": [0, 0, 0],       "axis": [0, 0, 1],  "type": "fixed" },
-    { "mesh": "xMateSR5_link1.stl", "xyz": [0, 0, 0.328],   "axis": [0, 0, 1],  "type": "revolute" },
-    { "mesh": "xMateSR5_link2.stl", "xyz": [0, 0, 0],       "axis": [0, 1, 0],  "type": "revolute" },
-    { "mesh": "xMateSR5_link3.stl", "xyz": [0.05, 0, 0.4],  "axis": [0, -1, 0], "type": "revolute" },
-    { "mesh": "xMateSR5_link4.stl", "xyz": [-0.05, 0, 0.4], "axis": [0, 0, 1],  "type": "revolute" },
-    { "mesh": "xMateSR5_link5.stl", "xyz": [0, 0.136, 0],   "axis": [0, -1, 0], "type": "revolute" },
-    { "mesh": "xMateSR5_link6.stl", "xyz": [0, 0, 0.1035],  "axis": [0, 0, 1],  "type": "revolute" }
+    { "mesh": "xMateSR5_base.stl",  "xyz": [0, 0, 0],                "axis": [0, 0, 1],  "type": "fixed" },
+    { "mesh": "xMateSR5_link1.stl", "xyz": [0, 0, 0.328],            "axis": [0, 0, 1],  "type": "revolute" },
+    { "mesh": "xMateSR5_link2.stl", "xyz": [0, 0, 0],                "axis": [0, 1, 0],  "type": "revolute" },
+    { "mesh": "xMateSR5_link3.stl", "xyz": [0.049664, 0, 0.399707],  "axis": [0, -1, 0], "type": "revolute" },
+    { "mesh": "xMateSR5_link4.stl", "xyz": [-0.049725, 0, 0.399811], "axis": [0, 0, 1],  "type": "revolute" },
+    { "mesh": "xMateSR5_link5.stl", "xyz": [0, 0.13547, 0],          "axis": [0, -1, 0], "type": "revolute" },
+    { "mesh": "xMateSR5_link6.stl", "xyz": [0, 0, 0.103868],         "axis": [0, 0, 1],  "type": "revolute" }
   ]
 }

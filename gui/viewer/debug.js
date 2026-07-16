@@ -136,88 +136,91 @@ let ready = false;   // set once main() finishes wiring (guards onFrame's TDZ)
     $('tipPos').textContent = tip.map((x) => x.toFixed(1)).join('  ');
   }
 
-  // ---------------- trace (Task 4) -----------------------------------------
+  // ---------------- trace -----------------------------------------------------
   function outlineToWaypoints(s) {
-    // world-space outline points -> probe poses at STANDOFF along the outline
-    // plane's normal (the shape's local +Z), aiming back at the outline.
-    const normal = new THREE.Vector3(0, 0, 1).applyQuaternion(s.group.quaternion).normalize();
+    // POSITION-ONLY: the tool tip follows the wireframe outline EXACTLY (Ra: "just
+    // position, I don't care about head rotation"). Waypoints are the outline
+    // points themselves (no standoff, no aim) -- orientation is left to the arm
+    // (the backend searches a reachable one per point). A dummy identity quat is
+    // included only to satisfy the waypoint schema. Points outside the workspace
+    // box are dropped + counted.
     const wps = [];
     let dropped = 0;
     const pts = outlinePoints(s.kind, SIZE);
     for (const lp of pts) {
       const world = lp.clone().applyQuaternion(s.group.quaternion).add(s.group.position);
-      const probe = world.clone().add(normal.clone().multiplyScalar(STANDOFF));
-      // constraints: never below the table (z>=0), stay inside the workspace box
-      const inBox = Math.abs(probe.x) <= DIMS[0] / 2 && Math.abs(probe.y) <= DIMS[1] / 2 &&
-                    probe.z >= 0 && probe.z <= DIMS[2];
+      const inBox = Math.abs(world.x) <= DIMS[0] / 2 && Math.abs(world.y) <= DIMS[1] / 2 &&
+                    world.z >= 0 && world.z <= DIMS[2];
       if (!inBox) { dropped++; continue; }
-      const dir = world.clone().sub(probe).normalize();
-      const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), dir);
       wps.push({
-        position: [probe.x, probe.y, probe.z],
-        quaternion: [q.x, q.y, q.z, q.w],
-        target: [world.x, world.y, world.z],
+        position: [world.x, world.y, world.z],
+        quaternion: [0, 0, 0, 1],                 // ignored (position-only)
+        target: [world.x, world.y, world.z],      // tip sits on the point (no aim)
       });
     }
     return { wps, dropped };
   }
 
-  let tracing = false;
-  $('traceBtn').onclick = async () => {
+  // "Trace outline" = PREVIEW ONLY. It builds the position-only wireframe path and
+  // plays it in the viewport; NOTHING is sent to the arm. When you're happy with
+  // the preview you press "Send to arm" (below). This replaces the old auto-send.
+  let previewWps = null;
+  let sending = false;
+  $('traceBtn').onclick = () => {
     if (!selected) { setStatus('add / select an outline first'); return; }
-    if (tracing) { setStatus('trace already running'); return; }
     const { wps, dropped } = outlineToWaypoints(selected);
-    if (!wps.length) { setStatus('outline entirely outside the workspace — nothing to trace'); return; }
-    tracing = true;
-    follow.suspended = true;                 // D2: trace overrides camera-follow
-    setStatus(`tracing ${selected.kind}: ${wps.length} poses` + (dropped ? ` (${dropped} dropped: out of workspace)` : ''));
-
-    // preview ALWAYS renders (module playback + IK-posed arm)
+    if (!wps.length) { setStatus('outline entirely outside the workspace — nothing to trace'); $('sendBtn').disabled = true; return; }
+    previewWps = wps;
+    follow.suspended = true;                 // trace overrides camera-follow
     v.buildPath(wps);
     v.play.speed = 8;
     v.play.on = true;
-    v.play.onDone = () => {
-      tracing = false;
-      follow.suspended = false;              // camera-follow resumes (D2)
-      setStatus('trace preview done');
-    };
+    v.play.onDone = () => { follow.suspended = false; };
+    $('sendBtn').disabled = false;
+    setStatus(`preview: ${selected.kind} — ${wps.length} points` +
+              (dropped ? ` (${dropped} dropped: out of workspace)` : '') +
+              ' · press "Send to arm" when happy');
+  };
 
-    // backend: same gated path as scan tracing (mock free, real arm gated)
+  // "Send to arm" — commit the previewed path to the real arm, POSITION-ONLY
+  // (the tip follows the wireframe; the backend searches a reachable orientation
+  // per point). Gated: mock free, real arm needs QC_ALLOW_SCAN_TRACE=1.
+  $('sendBtn').onclick = async () => {
+    if (!previewWps || !previewWps.length) { setStatus('trace a preview first'); return; }
+    if (sending) { setStatus('already sending'); return; }
+    if (!confirm(`Send ${previewWps.length} points to the arm? It will MOVE (position-only). ` +
+                 `Ensure the cell is clear and the E-stop is in reach.`)) return;
+    sending = true;
+    follow.suspended = true;
+    setStatus(`sending ${previewWps.length} points to the arm…`);
     try {
       const r = await (await fetch('/api/robot/follow_path', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ confirm: true, waypoints: wps, speedMms: 60, settleS: 0.05 }),
+        body: JSON.stringify({ confirm: true, waypoints: previewWps, positionOnly: true, speedMms: 60, settleS: 0.05 }),
       })).json();
       if (r.ok && r.started) {
-        setStatus(`arm tracing ${r.total} poses (backend)`);
         const poll = setInterval(async () => {
           try {
             const st = await (await fetch('/api/robot/follow_status')).json();
-            if (!st.running) {
-              clearInterval(poll);
-              setStatus(st.ok ? `arm trace complete — ${st.completed}/${st.total}` :
-                        `arm trace ${st.aborted ? 'aborted' : 'failed'} at ${st.completed}/${st.total}${st.error ? ' — ' + st.error : ''}`);
-            }
-          } catch (e) { clearInterval(poll); }
+            if (st.running) { setStatus(`arm tracing ${st.completed || 0}/${st.total || 0}…`); return; }
+            clearInterval(poll); sending = false; follow.suspended = false;
+            setStatus(st.ok ? `arm trace complete — ${st.completed}/${st.total}` :
+                      `arm trace ${st.aborted ? 'aborted' : 'failed'} at ${st.completed}/${st.total}${st.error ? ' — ' + st.error : ''}`);
+          } catch (e) { clearInterval(poll); sending = false; follow.suspended = false; }
         }, 300);
       } else {
-        setStatus(`preview only — arm refused: ${r.error || 'unknown'}`);
+        sending = false; follow.suspended = false;
+        setStatus(`arm refused: ${r.error || 'unknown'}`);
       }
-    } catch (e) { setStatus('preview only — backend unreachable: ' + e.message); }
+    } catch (e) { sending = false; follow.suspended = false; setStatus('backend unreachable: ' + e.message); }
   };
 
-  // ---------------- camera-follow (Task 5 / D2) ------------------------------
-  const follow = { preview: false, send: false, suspended: false, lastSent: 0, inflight: false, lastPose: null };
+  // ---------------- camera-follow (preview only) -----------------------------
+  const follow = { preview: false, suspended: false };
   $('followTgl').onclick = () => {
     follow.preview = !follow.preview;
     $('followTgl').classList.toggle('on', follow.preview);
-    setStatus(follow.preview ? 'camera-follow on — the arm re-aims at the view target' : 'camera-follow off');
-  };
-  $('sendTgl').onclick = () => {
-    follow.send = !follow.send;
-    $('sendTgl').classList.toggle('on', follow.send);
-    setStatus(follow.send ? 'sending follow poses to the arm (gated: mock free, real needs QC_ALLOW_SCAN_TRACE=1)'
-                          : 'follow poses no longer sent');
+    setStatus(follow.preview ? 'camera-follow on — the arm re-aims at the view target (preview)' : 'camera-follow off');
   };
 
   // test/inspection handle (playwright + manual debugging from the console)
@@ -235,26 +238,6 @@ let ready = false;   // set once main() finishes wiring (guards onFrame's TDZ)
     followAccum = 0;
     const aim = v.controls.target.clone();
     const tip = v.tipWorld();
-    v.solveIK(tip, aim, 8);                  // orientation-only re-aim (position held)
-
-    if (!follow.send || follow.inflight) return;
-    const now = performance.now();
-    if (now - follow.lastSent < 100) return; // send <=10 Hz
-    const dir = aim.clone().sub(tip).normalize();
-    const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), dir);
-    const pose = [tip.x, tip.y, tip.z, q.x, q.y, q.z, q.w].map((x) => +x.toFixed(4)).join(',');
-    if (pose === follow.lastPose) return;    // unchanged — don't spam
-    follow.lastPose = pose; follow.lastSent = now; follow.inflight = true;
-    fetch('/api/robot/move_pose', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ position: [tip.x, tip.y, tip.z], quaternion: [q.x, q.y, q.z, q.w], speedMms: 60 }),
-    }).then((r) => r.json()).then((r) => {
-      follow.inflight = false;
-      if (!r.ok) {
-        follow.send = false;
-        $('sendTgl').classList.remove('on');
-        setStatus('send-to-arm disabled — ' + (r.error || 'refused'));
-      }
-    }).catch(() => { follow.inflight = false; });
+    v.solveIK(tip, aim, 8);                  // preview only: re-aim, never commands the arm
   }
 })();

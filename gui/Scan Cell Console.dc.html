@@ -422,11 +422,11 @@
               <span style="font-size:11px;font-family:var(--font-mono);color:var(--color-charcoal-500)">controller base frame, mm (matches the readout above) · translation only</span>
               <span style="margin-left:auto;display:flex;align-items:center;gap:8px">
                 <label style="display:flex;align-items:center;gap:4px;font-size:11px;font-weight:600;color:var(--color-charcoal-500)">X
-                  <input type="number" step="10" value="{{ gotoX }}" onInput="{{ setGotoX }}" style="width:76px;height:32px;padding:0 6px;border:1px solid var(--color-charcoal-200);border-radius:5px;font-family:var(--font-mono);font-size:12px;font-weight:600;text-align:right;outline:none" /></label>
+                  <input type="text" inputmode="text" spellcheck="false" value="{{ gotoX }}" onInput="{{ setGotoX }}" style="width:76px;height:32px;padding:0 6px;border:1px solid var(--color-charcoal-200);border-radius:5px;font-family:var(--font-mono);font-size:12px;font-weight:600;text-align:right;outline:none" /></label>
                 <label style="display:flex;align-items:center;gap:4px;font-size:11px;font-weight:600;color:var(--color-charcoal-500)">Y
-                  <input type="number" step="10" value="{{ gotoY }}" onInput="{{ setGotoY }}" style="width:76px;height:32px;padding:0 6px;border:1px solid var(--color-charcoal-200);border-radius:5px;font-family:var(--font-mono);font-size:12px;font-weight:600;text-align:right;outline:none" /></label>
+                  <input type="text" inputmode="text" spellcheck="false" value="{{ gotoY }}" onInput="{{ setGotoY }}" style="width:76px;height:32px;padding:0 6px;border:1px solid var(--color-charcoal-200);border-radius:5px;font-family:var(--font-mono);font-size:12px;font-weight:600;text-align:right;outline:none" /></label>
                 <label style="display:flex;align-items:center;gap:4px;font-size:11px;font-weight:600;color:var(--color-charcoal-500)">Z
-                  <input type="number" step="10" value="{{ gotoZ }}" onInput="{{ setGotoZ }}" style="width:76px;height:32px;padding:0 6px;border:1px solid var(--color-charcoal-200);border-radius:5px;font-family:var(--font-mono);font-size:12px;font-weight:600;text-align:right;outline:none" /></label>
+                  <input type="text" inputmode="text" spellcheck="false" value="{{ gotoZ }}" onInput="{{ setGotoZ }}" style="width:76px;height:32px;padding:0 6px;border:1px solid var(--color-charcoal-200);border-radius:5px;font-family:var(--font-mono);font-size:12px;font-weight:600;text-align:right;outline:none" /></label>
                 <button onClick="{{ goToPoint }}" style="height:32px;padding:0 14px;border:0;border-radius:6px;background:#000;color:#fff;font-size:12px;font-weight:700;cursor:pointer;font-family:var(--font-sans)">Go to point</button>
               </span>
             </div>
@@ -440,6 +440,7 @@
               <span style="font-size:11px;font-family:var(--font-mono);color:var(--color-charcoal-500)">arm-frame poses → /api/robot/follow_path</span>
               <span style="margin-left:auto;font-family:var(--font-mono);font-size:12px;color:var(--color-charcoal-500)">{{ traceLabel }}</span>
               <button onClick="{{ traceScanPath }}" style="display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 14px;border:0;border-radius:6px;background:#000;color:#fff;font-size:12px;font-weight:700;cursor:pointer;font-family:var(--font-sans)"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><use href="assets/icons.svg#lightning"/></svg>Send to robot</button>
+              <button onClick="{{ scanAimAtPart }}" title="Continuous scan, head aims at the part within ±10°" style="display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 14px;border:0;border-radius:6px;background:var(--color-lime-500);color:#08120a;font-size:12px;font-weight:700;cursor:pointer;font-family:var(--font-sans)">Scan (aim at part)</button>
               <button onClick="{{ stopTrace }}" style="height:32px;padding:0 14px;border:1px solid var(--color-charcoal-200);border-radius:6px;background:#fff;color:#000;font-size:12px;font-weight:700;cursor:pointer;font-family:var(--font-sans)">Stop</button>
             </div>
             <div style="padding:12px 16px">
@@ -547,7 +548,7 @@ class Component extends DCLogic {
       // the SAME frame the "Robot head — controller-reported" strip shows, so
       // you can validate commanded-vs-reported 1:1. Default sits near the homed
       // pose (0,135,1259) so the first move is small + reachable.
-      gotoX:0, gotoY:135, gotoZ:1150,
+      gotoX:'0', gotoY:'135', gotoZ:'1150',   // RAW strings so '-', '', '1.' type freely; parsed on Go
       traceBarStyle:'height:100%;width:0%;background:var(--color-lime-500);transition:width .2s',
     };
     this._logSeq=1;
@@ -752,21 +753,25 @@ class Component extends DCLogic {
   // Operator types a target in the CONTROLLER BASE frame mm (what the readout
   // strip shows). We express it through the table frame the API speaks —
   // p_table = (x/1000, -y/1000, (H - z)/1000), H = mount height from /api/config
-  // — and POST /api/robot/move_pose. The backend converts table->base with the
-  // SAME H, so the two conversions cancel and the arm is commanded at exactly
-  // the (x,y,z) base-frame point you typed (validate it against the readout).
-  // Translation only: orientation is the homed "tool aligned with base"
-  // (table-frame quat [1,0,0,0] -> base-frame identity). Reachability is the
-  // controller's call — an unreachable target returns an arm error, no fake sphere.
-  _setGoto=(k)=>(e)=>{ const v=parseFloat(e.target.value); if(!Number.isNaN(v)) this.setState({[k]:v}); };
+  // — and POST /api/robot/move_pose with keepOrientation. The X/Y/Z you type are
+  // the controller's OWN endInRef frame in mm (exactly what the readout strip
+  // shows) — the backend commands them directly (no frame conversion), running
+  // the same calcIk/checkPath pre-flight + MoveJ as Ra's working xCore debugger.
+  // TRANSLATE ONLY: the arm holds its current orientation. If the target is
+  // singular/unreachable, the pre-flight rejects it and NOTHING moves (check the
+  // server log for the calcIk verdict). Reachability is the controller's call.
+  // Keep the RAW typed text in state (no parse-on-keystroke) so you can type '-',
+  // a leading '.', or clear the box without it fighting you. Parsing happens only
+  // when you press Go.
+  _setGoto=(k)=>(e)=>{ this.setState({[k]: e.target.value}); };
   goToPoint=async ()=>{
     if(!this.state.connected){ this._log('warn','arm','Go-to ignored — arm not connected'); return; }
-    const {gotoX:x, gotoY:y, gotoZ:z} = this.state;
-    const H = ((this._CFG&&this._CFG.workspace&&this._CFG.workspace.mount&&this._CFG.workspace.mount.base_xyz_mm)||[1000,375,1200])[2];
-    if(!window.confirm(`Send the arm to arm-frame point [${x}, ${y}, ${z}] mm at ${this.state.motionSpeed} mm/s?\nThe arm will MOVE. Ensure the cell is clear and the E-stop is in reach.`)) return;
-    const position=[x/1000, -y/1000, (H - z)/1000];       // arm mm -> table m
-    await this._motion('move_pose', {position, quaternion:[1,0,0,0], speedMms:this.state.motionSpeed},
-                       `Go to [${x}, ${y}, ${z}] mm (arm frame) @ ${this.state.motionSpeed} mm/s`);
+    const x=parseFloat(this.state.gotoX), y=parseFloat(this.state.gotoY), z=parseFloat(this.state.gotoZ);
+    if([x,y,z].some(Number.isNaN)){ this._log('warn','arm','Go-to needs three numbers (X, Y, Z in mm)'); return; }
+    if(!window.confirm(`Send the arm to controller-frame point [${x}, ${y}, ${z}] mm at ${this.state.motionSpeed} mm/s (keeping current orientation)?\nThe arm will MOVE. Ensure the cell is clear and the E-stop is in reach.`)) return;
+    const position=[x/1000, y/1000, z/1000];       // endInRef mm -> m (no conversion; matches readout)
+    await this._motion('move_pose', {position, keepOrientation:true, speedMms:this.state.motionSpeed},
+                       `Go to [${x}, ${y}, ${z}] mm (endInRef, hold orientation) @ ${this.state.motionSpeed} mm/s`);
   };
   onPartInput=(e)=>this.setState({partId:e.target.value});
   scanId=()=>{ this.setState({partId:(this.state.matched&&this.state.matched.id)||''}); };
@@ -788,7 +793,7 @@ class Component extends DCLogic {
     try{
       const t = await (await fetch('/api/robot/follow_path',{method:'POST',
         headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({confirm:true, speedMms:this.state.motionSpeed})})).json();
+        body: JSON.stringify({confirm:true, positionOnly:true, speedMms:this.state.motionSpeed})})).json();
       if(!t.ok || !t.started){
         this._log('warn','arm','Send to robot refused — '+(t.error||'unknown'));
         alert('Arm did not start:\n'+(t.error||'unknown'));
@@ -910,12 +915,28 @@ class Component extends DCLogic {
     if(!window.confirm('Send the scan path to the arm and trace it?\nThe arm will MOVE. Ensure the cell is clear and the E-stop is in reach.')) return;
     try{
       const r = await (await fetch('/api/robot/follow_path',{method:'POST',
-        headers:{'Content-Type':'application/json'}, body: JSON.stringify({confirm:true, speedMms:this.state.motionSpeed})})).json();
+        headers:{'Content-Type':'application/json'}, body: JSON.stringify({confirm:true, positionOnly:true, speedMms:this.state.motionSpeed})})).json();
       if(!r.ok || !r.started){ this._log('warn','arm','Send to robot refused — '+(r.error||'unknown')); return; }
       this._log('info','arm',`Tracing scan path — ${r.total} waypoints (source: ${r.source||'path'})`);
       this._setTrace(0, r.total, true);
       this._pollTrace();
     }catch(e){ this._log('error','arm','Send to robot failed: '+e); }
+  };
+  // Oriented CONTINUOUS scan: the head aims at the part (within ±10° of the
+  // surface normal), each scan line run as one blended sweep. Shares the same
+  // progress/poll plumbing (follow_status) as the position-only trace.
+  scanAimAtPart=async ()=>{
+    if(!this.state.connected){ this._log('warn','arm','Scan ignored — arm not connected'); return; }
+    if(this.state.traceRunning){ this._log('warn','arm','A path is already tracing'); return; }
+    if(!window.confirm('Run the ORIENTED scan (head aims at the part, ±10°, continuous)?\nThe arm will MOVE. Ensure the cell is clear and the E-stop is in reach.')) return;
+    try{
+      const r = await (await fetch('/api/robot/scan_trace',{method:'POST',
+        headers:{'Content-Type':'application/json'}, body: JSON.stringify({confirm:true, incidenceDeg:10, speedMms:this.state.motionSpeed})})).json();
+      if(!r.ok || !r.started){ this._log('warn','arm','Oriented scan refused — '+(r.error||'unknown')); return; }
+      this._log('info','arm',`Oriented scan — ${r.total} waypoints (source: ${r.source||'path'})`);
+      this._setTrace(0, r.total, true);
+      this._pollTrace();
+    }catch(e){ this._log('error','arm','Oriented scan failed: '+e); }
   };
   _pollTrace=()=>{
     clearInterval(this._traceTick);
@@ -998,7 +1019,7 @@ class Component extends DCLogic {
       setLogAll:()=>this.setLogFilter('all'),setLogInfo:()=>this.setLogFilter('info'),setLogWarn:()=>this.setLogFilter('warn'),setLogError:()=>this.setLogFilter('error'),
       // "Send to robot" scan-path trace (T6). Handlers + pre-formatted display
       // strings, exposed to the template the same way as the controls above.
-      traceScanPath:this.traceScanPath, stopTrace:this.stopTrace,
+      traceScanPath:this.traceScanPath, scanAimAtPart:this.scanAimAtPart, stopTrace:this.stopTrace,
       traceLabel:s.traceLabel, traceBarStyle:s.traceBarStyle,
       motionSpeed:s.motionSpeed, setMotionSpeed:this.setMotionSpeed,
       viewerSrc:'viewer/index.html?n='+(s.viewerNonce||0),

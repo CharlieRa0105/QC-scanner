@@ -266,8 +266,10 @@
       const pos = waypoints[i].pos.clone().lerp(waypoints[j].pos, f);
       const tgt = waypoints[i].target.clone().lerp(waypoints[j].target, f);
       if (scanner) { scanner.position.copy(pos); scanner.lookAt(tgt); scanner.rotateX(Math.PI / 2); }
-      scannerCam.position.copy(pos); scannerCam.lookAt(tgt);
-      if (play.poseArm && arm.ready) solveIK(pos, tgt, 14);
+      // The arm FOLLOWS the path: pose it to this waypoint. The scanner camera is
+      // NOT placed here -- it's glued to the actual toolhead each frame (see
+      // syncScannerCam), so the POV rides the head, not the ideal path point.
+      if (play.poseArm && arm.ready) solveIK(pos, tgt, 24);
       play.t = t;
       if (play.onStep) play.onStep(t, n);
     }
@@ -298,6 +300,19 @@
       }
     }
 
+    // Glue the scanner camera to the ACTUAL toolhead: sit at the tool tip and
+    // look along the tool's forward axis. The camera rides the head firmly (so
+    // the POV never sees the toolhead -- it's behind the lens), and because the
+    // arm is IK-posed to the path, the head (and thus the camera) FOLLOWS the
+    // path. A tiny forward offset keeps the flange mesh behind the near plane.
+    function syncScannerCam() {
+      if (!arm.ready || !arm.tip) return;
+      const tip = tipWorld();
+      const fwd = tipDirWorld().normalize();
+      scannerCam.position.copy(tip).addScaledVector(fwd, 0.01);
+      scannerCam.lookAt(tip.clone().addScaledVector(fwd, 1.0));
+    }
+
     // table-frame (m) <-> arm-base-frame (mm) conversions for the debug UI.
     function tableToArmMm(v) { return [v.x * 1000, -v.y * 1000, (H - v.z) * 1000]; }
     function armMmToTable(a) { return new THREE.Vector3(a[0] / 1000, -a[1] / 1000, H - a[2] / 1000); }
@@ -325,6 +340,7 @@
         try { opts.onFrame(dt); } catch (e) { console.warn('onFrame error:', e); }
       }
       controls.update();
+      syncScannerCam();          // keep the POV glued to the live toolhead
       renderer.render(scene, view === 'scanner' ? scannerCam : orbitCam);
       raf = requestAnimationFrame(tick);
     }

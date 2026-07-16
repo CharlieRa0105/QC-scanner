@@ -140,8 +140,14 @@ class QCRequestHandler(SimpleHTTPRequestHandler):
         # Same-origin in normal use, but allow CORS so the endpoint can be
         # probed from a separate dev tool without a preflight headache.
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            # The browser polls status/joints continuously and routinely closes a
+            # connection before we finish writing. That's benign -- swallow it so
+            # the terminal isn't buried in tracebacks (which hid the arm logs).
+            pass
 
     def do_GET(self):
         route = self.path.split("?")[0]
@@ -315,7 +321,8 @@ class QCRequestHandler(SimpleHTTPRequestHandler):
             try:
                 result = ROBOT.move_pose_once(
                     payload.get("position"), payload.get("quaternion"),
-                    payload.get("speedMms"))
+                    payload.get("speedMms"),
+                    keep_orientation=bool(payload.get("keepOrientation")))
                 self._send_json(200, result)
             except Exception as e:  # noqa: BLE001
                 traceback.print_exc()
@@ -360,6 +367,43 @@ class QCRequestHandler(SimpleHTTPRequestHandler):
                 waypoints,
                 speed_mms=payload.get("speedMms"),
                 settle_s=payload.get("settleS", 0.3),
+                position_only=bool(payload.get("positionOnly")),
+            )
+            result["source"] = source
+            self._send_json(200, result)
+            return
+
+        # ---- oriented CONTINUOUS scan: head aims at the part (within a cone),
+        # each scan line traced as one blended sweep. Same waypoint source +
+        # gating as follow_path; uses the planner's aim quaternions + line_id.
+        if route == "/api/robot/scan_trace":
+            if not payload.get("confirm"):
+                self._send_json(400, {"ok": False, "error": "operator confirm required (confirm=true)"})
+                return
+            waypoints = payload.get("waypoints")
+            source = "request body"
+            if not waypoints:
+                try:
+                    with open(SCANPATH_FILE) as f:
+                        sp = json.load(f)
+                    waypoints = sp.get("waypoints", [])
+                    source = SCANPATH_FILE.name
+                    if sp.get("units") != "m":
+                        self._send_json(400, {"ok": False,
+                            "error": f"{SCANPATH_FILE.name} is not in arm frame "
+                                     f"(units={sp.get('units')!r}); run scanpath_convert.py first"})
+                        return
+                except FileNotFoundError:
+                    self._send_json(400, {"ok": False,
+                        "error": f"no waypoints in body and no {SCANPATH_FILE.name} on server"})
+                    return
+            if not waypoints:
+                self._send_json(400, {"ok": False, "error": "no waypoints to scan"})
+                return
+            result = ROBOT.start_scan_trace(
+                waypoints,
+                incidence_deg=float(payload.get("incidenceDeg", 10.0)),
+                speed_mms=payload.get("speedMms"),
             )
             result["source"] = source
             self._send_json(200, result)
@@ -384,8 +428,14 @@ class QCRequestHandler(SimpleHTTPRequestHandler):
         super().end_headers()
 
     def log_message(self, fmt, *args):
-        # Terse one-line access log to stderr (default is noisy).
-        sys.stderr.write("[qc-backend] %s\n" % (fmt % args))
+        # Terse one-line access log to stderr (default is noisy). Skip the
+        # high-frequency polling reads (status/joints/follow_status) so real
+        # events -- moves, errors, the [ROKAE] arm logs -- stay visible.
+        msg = fmt % args
+        if any(p in msg for p in ("/api/robot/joints", "/api/robot/status",
+                                  "/api/robot/follow_status")):
+            return
+        sys.stderr.write("[qc-backend] %s\n" % msg)
 
 
 def main():

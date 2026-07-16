@@ -533,5 +533,53 @@
       "Point-cloud registration not implemented.",
       "QC quality gate not evaluated \u2014 pass/fail undetermined."
     ]
+  },
+  {
+    "scanId": "SCAN-20260716-154718",
+    "partId": "ARRI - Tower - wire sensor L bracket",
+    "startedAt": "2026-07-16T15:47:18",
+    "finishedAt": "2026-07-16T15:47:18",
+    "status": "incomplete",
+    "result": null,
+    "metrics": {
+      "meanDeviationMm": null,
+      "rmseMm": null,
+      "stdMm": null,
+      "coveragePct": null,
+      "pointCount": null
+    },
+    "toleranceMm": null,
+    "cloudFile": null,
+    "phases": [
+      {
+        "key": "execute",
+        "label": "Execute trajectory",
+        "implemented": false,
+        "status": "not_implemented"
+      },
+      {
+        "key": "capture",
+        "label": "Capture point cloud",
+        "implemented": false,
+        "status": "not_implemented"
+      },
+      {
+        "key": "register",
+        "label": "Register + merge",
+        "implemented": false,
+        "status": "not_implemented"
+      },
+      {
+        "key": "quality",
+        "label": "Quality gate",
+        "implemented": false,
+        "status": "not_implemented"
+      }
+    ],
+    "notes": [
+      "Scanner capture not implemented \u2014 no point cloud was captured.",
+      "Point-cloud registration not implemented.",
+      "QC quality gate not evaluated \u2014 pass/fail undetermined."
+    ]
   }
 ]
