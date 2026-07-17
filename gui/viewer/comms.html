@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QC Scanner — Arm Comms Monitor</title>
+<!--
+  Live arm-comms monitor: streams every command sent to the arm and its response
+  (the backend's _blog feed, which the bridge AND the ROKAE driver both write to)
+  via GET /api/robot/log?since=<seq>. Read-only; opened from the debug viewport.
+-->
+<style>
+  :root { --bg:#0e1116; --fg:#d7dde5; --dim:#7c8896; --line:#1c222b;
+          --ok:#57c46b; --err:#e5534b; --warn:#e3b341; --cmd:#5ca8ff; --lime:#c3ef00; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+               font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12px; }
+  header { display: flex; align-items: center; gap: 12px; padding: 9px 14px;
+           border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--bg); }
+  header .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--lime); box-shadow: 0 0 8px var(--lime); }
+  header b { font-size: 12.5px; }
+  header .sp { flex: 1; }
+  header button, header input { font: inherit; color: var(--fg); background: #171d25;
+           border: 1px solid var(--line); border-radius: 5px; padding: 4px 9px; cursor: pointer; }
+  header input[type=text] { cursor: text; width: 150px; }
+  header .stat { color: var(--dim); }
+  #log { padding: 8px 12px 40px; white-space: pre-wrap; word-break: break-word; }
+  .row { padding: 1px 0; border-bottom: 1px solid transparent; }
+  .row:hover { background: #141a22; }
+  .t { color: var(--dim); }
+  .cmd { color: var(--cmd); }
+  .ok { color: var(--ok); }
+  .err { color: var(--err); }
+  .warn { color: var(--warn); }
+  .rokae { color: var(--fg); }
+  .bridge { color: #a9b6c6; }
+</style>
+</head>
+<body>
+  <header>
+    <span class="dot"></span><b>Arm comms</b>
+    <span class="stat" id="stat">connecting…</span>
+    <span class="sp"></span>
+    <input type="text" id="filter" placeholder="filter (e.g. calcIk)">
+    <button id="pauseBtn">Pause</button>
+    <button id="clearBtn">Clear</button>
+    <button id="wrapBtn">Errors only: off</button>
+  </header>
+  <div id="log"></div>
+
+<script>
+'use strict';
+const $ = (id) => document.getElementById(id);
+const logEl = $('log'), statEl = $('stat');
+let seq = 0, paused = false, errorsOnly = false, filter = '';
+
+function classify(line) {
+  const l = line.toLowerCase();
+  if (/(code=(?!0\b)\d|invalid|error|fail|rejected|refused|exceed|empty cache|exception|unreachable)/.test(l)) return 'err';
+  if (/\bok\b|accepted|:\s*ok|started|complete|settled|-> in motion|motion started/.test(l)) return 'ok';
+  if (/skip|warn|disabled|placeholder/.test(l)) return 'warn';
+  if (/\[rokae\]/.test(l)) return 'rokae';
+  if (/\[bridge\]/.test(l)) return 'bridge';
+  return '';
+}
+function append(line) {
+  const cls = classify(line);
+  if (errorsOnly && cls !== 'err') return;
+  if (filter && !line.toLowerCase().includes(filter)) return;
+  const div = document.createElement('div');
+  div.className = 'row ' + cls;
+  // split "[HH:MM:SS] rest" so the timestamp is dimmed
+  const m = line.match(/^(\[\d\d:\d\d:\d\d\])\s?(.*)$/s);
+  if (m) { div.innerHTML = '<span class="t"></span> '; div.firstChild.textContent = m[1];
+           div.appendChild(document.createTextNode(m[2])); }
+  else div.textContent = line;
+  logEl.appendChild(div);
+}
+async function poll() {
+  if (!paused) {
+    try {
+      const r = await (await fetch('/api/robot/log?since=' + seq)).json();
+      if (r && r.ok) {
+        const atBottom = (window.innerHeight + window.scrollY) >= (document.body.scrollHeight - 40);
+        (r.lines || []).forEach(append);
+        seq = r.seq;
+        statEl.textContent = 'live · ' + seq + ' lines';
+        // trim DOM so it can't grow unbounded
+        while (logEl.childElementCount > 2000) logEl.removeChild(logEl.firstChild);
+        if (atBottom) window.scrollTo(0, document.body.scrollHeight);
+      }
+    } catch (e) { statEl.textContent = 'backend unreachable — retrying…'; }
+  }
+  setTimeout(poll, 300);
+}
+$('pauseBtn').onclick = () => { paused = !paused; $('pauseBtn').textContent = paused ? 'Resume' : 'Pause';
+                                statEl.textContent = paused ? 'paused' : 'live'; };
+$('clearBtn').onclick = () => { logEl.innerHTML = ''; };
+$('wrapBtn').onclick = () => { errorsOnly = !errorsOnly;
+                               $('wrapBtn').textContent = 'Errors only: ' + (errorsOnly ? 'on' : 'off'); };
+$('filter').oninput = (e) => { filter = e.target.value.trim().toLowerCase(); };
+poll();
+</script>
+</body>
+</html>

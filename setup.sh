@@ -74,9 +74,17 @@ else
   [ -e "${VENV}" ] && warn "${VENV} missing/broken (e.g. moved from another path) — rebuilding"
   uv venv --clear --python "${PY_VERSION}" "${VENV}"
 fi
-# The console backend is Python-stdlib only, so there are no pip deps to install
-# here — the venv exists purely to pin the SDK-compatible 3.12 interpreter.
 ok "${VENV} ready"
+
+# ---- 3b. planner Python deps ------------------------------------------------
+# The console BACKEND (server.py) is Python-stdlib only, but the PATH PLANNER
+# CLIs it shells out to (scripts/plan_*.py -> libs/path_planning) need these:
+#   numpy, gmsh              CAD load + maths
+#   trimesh + scipy/networkx/rtree   mesh slicing & down-raycast (lawnmower/contour planners)
+say "Installing path-planner dependencies into ${VENV}"
+uv pip install --python "${VENV}/bin/python" \
+  numpy gmsh trimesh scipy networkx rtree
+ok "planner deps installed"
 
 # ---- 4. ROKAE SDK -----------------------------------------------------------
 say "Locating the ROKAE xCore SDK (needed to talk to the physical arm)"

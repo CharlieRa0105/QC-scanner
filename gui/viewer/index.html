@@ -34,8 +34,14 @@
   #transport .wpt { font-family: var(--font-mono); font-size: 12px; color: var(--ink-dim); min-width: 84px; }
 
   /* right-side layer + view controls */
-  #controls { top: 14px; right: 14px; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; width: 190px; }
+  #controls { top: 14px; right: 14px; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; width: 210px; max-height: calc(100vh - 40px); overflow-y: auto; }
   #controls .grp-label { font-size: 10px; font-weight: 700; letter-spacing: .08em; color: var(--ink-dim); text-transform: uppercase; }
+  #controls .row { display: flex; gap: 6px; align-items: center; }
+  #controls .row button { flex: 1; height: 30px; border-radius: 6px; border: 1px solid var(--panel-line); background: #fff; font-size: 11px; cursor: pointer; font-family: var(--font-mono); }
+  #controls button.primary { background: var(--lime); border-color: var(--lime); color: #08120a; font-weight: 700; }
+  #controls .chk { display: flex; align-items: center; gap: 7px; font-size: 12px; cursor: pointer; }
+  #controls input[type=range] { flex: 1; accent-color: var(--lime); }
+  #controls .hval { font-family: var(--font-mono); font-size: 11px; color: var(--ink-dim); min-width: 50px; text-align: right; }
 
   #status { left: 14px; bottom: 16px; padding: 7px 12px; font-family: var(--font-mono); font-size: 11px; color: var(--ink-dim); }
   #status b { color: #5c7300; font-weight: 700; }   /* dark lime — readable on light */
@@ -61,6 +67,25 @@
     <div class="toggle on" data-layer="targets"><span>Aim rays</span><span class="sw"></span></div>
     <div class="toggle on" data-layer="arm"><span>Robot arm</span><span class="sw"></span></div>
     <div class="toggle on" data-layer="table"><span>Table + grid</span><span class="sw"></span></div>
+
+    <div class="grp-label" style="margin-top:2px">Orient part (re-plans)</div>
+    <div class="row">
+      <button id="flipX">Flip X</button>
+      <button id="flipY">Flip Y</button>
+      <button id="spinZ">Spin Z</button>
+      <button id="flipReset" title="Reset orientation">⟲</button>
+    </div>
+
+    <div class="grp-label" style="margin-top:2px">Table height</div>
+    <div class="row">
+      <input type="range" id="tableH" min="400" max="1400" step="10">
+      <span class="hval" id="tableHVal"></span>
+    </div>
+
+    <label class="chk"><input type="checkbox" id="showDome"> Show hemisphere</label>
+
+    <div class="grp-label" style="margin-top:2px">Diagnostics</div>
+    <div class="row"><button id="commsBtn">Arm comms monitor ↗</button></div>
   </div>
 
   <div id="transport" class="panel">

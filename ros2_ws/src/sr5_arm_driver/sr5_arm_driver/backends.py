@@ -262,7 +262,7 @@ class MockArm:
         """Mock has no kinematics -- every pose is 'reachable' for preview."""
         return True
 
-    def move_pose_list(self, poses, speed_mms, zone_mm=None):
+    def move_pose_list(self, poses, speed_mms, zone_mm=None, linear=True):
         """Mock continuous sweep: jump to the final pose (no per-point physics)."""
         if not self.powered or self.alarm or self.drag or not poses:
             self.log("[MOCK] scan sweep rejected: not ready / empty.")
@@ -662,10 +662,14 @@ class RokaeArm:
                 self.log(f"[ROKAE]   operationState={st} -> motion STARTED")
                 return True, "in motion"
             time.sleep(0.05)
-        # Didn't start and no error: the classic silent no-move.
+        # Didn't start and no error: the classic silent no-move. Return an explicit
+        # failure tuple -- never fall through to None (that crashed / mis-reported
+        # callers that unpack the result).
         err = self._move_error()
         if err:
             return False, err
+        return False, "no motion within start timeout (controller accepted but arm stayed idle)"
+
     def _calcik_ok(self, trans_m, rpy_rad, model, toolset):
         """True if the controller's offline IK finds a solution for this exact
         POSE (position + orientation). No motion."""
@@ -940,30 +944,50 @@ class RokaeArm:
         except Exception:  # noqa: BLE001
             return None
 
-    def move_pose_list(self, poses, speed_mms, zone_mm=None):
-        """CONTINUOUS scan sweep: append EVERY pose as a MoveL with a turning zone
-        and moveStart ONCE, so the controller blends through them without stopping
-        (that's what a continuous scan needs). poses = [(trans_m[3], rpy_rad[3]),
-        ...] already in the endInRef frame and pre-checked reachable by the caller.
-        Confirms motion STARTED (operationState); the caller waits for completion.
-        Returns True if the sweep started."""
+    def move_pose_list(self, poses, speed_mms, zone_mm=None, linear=True):
+        """CONTINUOUS scan sweep: append EVERY pose with a turning zone and moveStart
+        ONCE, so the controller blends through them without stopping. poses =
+        [(trans_m[3], rpy_rad[3]), ...] in the endInRef frame, pre-checked reachable.
+
+        linear=True  -> MoveL: straight-line TCP path (the whole path must be
+                        reachable AND non-singular; strict).
+        linear=False -> MoveJ: joint-interpolated blend through the poses -- only each
+                        pose must be reachable, not the straight-line path between
+                        them. Needed for the dome (inward-facing orientations whose
+                        straight-line MoveL path is singular/unreachable).
+
+        Confirms motion STARTED; the caller waits for completion. Returns True if it
+        started."""
         sdk, r = self.sdk, self.robot
         z = float(zone_mm if zone_mm is not None else DEFAULT_ZONE_MM)
         try:
             self._prep()
-            cmds = [sdk.MoveLCommand(
-                        sdk.CartesianPosition([float(v) for v in t], [float(a) for a in rpy]),
-                        float(speed_mms), z)
+            CmdCls = sdk.MoveLCommand if linear else sdk.MoveJCommand
+            cmds = [CmdCls(sdk.CartesianPosition([float(v) for v in t], [float(a) for a in rpy]),
+                           float(speed_mms), z)
                     for (t, rpy) in poses]
-            self.log(f"[ROKAE] scan sweep: {len(cmds)} blended MoveL poses, "
-                     f"speed={speed_mms} mm/s zone={z} mm")
-            ec_a = {}
-            r.moveAppend(cmds, sdk.PyString(), ec_a)
-            self.log(f"[ROKAE]   moveAppend({len(cmds)}): {self._ec_str(ec_a) or 'ok'}")
+            self.log(f"[ROKAE] scan sweep: {len(cmds)} blended {'MoveL' if linear else 'MoveJ'} "
+                     f"poses, speed={speed_mms} mm/s zone={z} mm")
+            # The controller rejects a single moveAppend with too many commands
+            # (observed: 76 ok, 107 -> code=259 'argument invalid'). Append in
+            # chunks UNDER that cap but moveStart ONCE, so the whole line still runs
+            # as one continuous blended sweep -- the queue accumulates across appends.
+            MAX_APPEND = 50
+            for i in range(0, len(cmds), MAX_APPEND):
+                chunk = cmds[i:i + MAX_APPEND]
+                ec_a = {}
+                r.moveAppend(chunk, sdk.PyString(), ec_a)
+                ea = self._ec_str(ec_a)
+                self.log(f"[ROKAE]   moveAppend({len(chunk)}): {ea or 'ok'}")
+                if ea:                     # a rejected append -> stop cleanly, don't moveStart an empty/partial cache
+                    self._status = f"error:{ea}"
+                    self.log(f"[ROKAE] scan sweep REJECTED at moveAppend: {ea}")
+                    return False
             ec_s = {}
             r.moveStart(ec_s)
             self.log(f"[ROKAE]   moveStart: {self._ec_str(ec_s) or 'ok'}")
-            ok, detail = self._move_outcome()
+            outcome = self._move_outcome()
+            ok, detail = outcome if outcome else (False, "no motion outcome")
             if not ok:
                 self._status = f"error:{detail}"
                 self.log(f"[ROKAE] scan sweep REJECTED: {detail}")

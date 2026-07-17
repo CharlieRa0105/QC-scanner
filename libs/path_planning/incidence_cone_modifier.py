@@ -172,10 +172,11 @@ def build_orientation_frame(z_axis, travel_direction):
     x_raw = travel_direction - np.dot(travel_direction, z) * z
     if np.linalg.norm(x_raw) < 1e-9:
         # Travel direction and normal are parallel -- there's no unique
-        # orthogonal projection to build X from. Shouldn't happen for a
-        # probe scanning a surface it's moving across, so this is treated
-        # as a data problem to surface, not silently worked around.
-        raise ValueError("travel direction is parallel to the surface normal")
+        # orthogonal projection to build X from. This is rare (a probe moving
+        # along its own normal) but a single such waypoint must NOT abort the
+        # whole plan, so fall back to any axis orthogonal to z instead of raising.
+        seed = np.array([1.0, 0.0, 0.0]) if abs(z[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
+        x_raw = seed - np.dot(seed, z) * z
     x = _normalize(x_raw)
     y = np.cross(z, x)
     return x, y, z

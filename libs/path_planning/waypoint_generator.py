@@ -157,6 +157,62 @@ def _group_by_normal(normals, angle_tol_deg):
     return groups, means
 
 
+def _mean_unit_normal(normals, members):
+    """Unit mean of the outward normals of `members` (indices into `normals`)."""
+    s = np.zeros(3)
+    for i in members:
+        n = normals[i]
+        s += n / (np.linalg.norm(n) + 1e-12)
+    return s / (np.linalg.norm(s) + 1e-12)
+
+
+def _merge_small_groups(groups, means, normals, min_samples):
+    """
+    Fold every undersized face group into its nearest-normal neighbour.
+
+    _group_by_normal shatters a doubly-curved transition surface -- a fillet or
+    chamfer between two flat faces -- into many thin angular bands, because its
+    normal sweeps in 2D. Each band is too small to raster into anything but a
+    2-3 point clump, and those clumps are exactly the "scattered points" a raster
+    should never produce. This pass repairs that: while the smallest group has
+    fewer than `min_samples` members, it is merged into whichever OTHER group has
+    the closest mean normal (largest dot product), and that group's mean is
+    recomputed. A fillet band thus folds into the adjacent real face and gets
+    covered as part of it -- each point still carries its OWN normal downstream,
+    so the standoff offset and orientation stay correct even though the point was
+    rastered in the neighbour face's plane (the incidence-cone stage absorbs the
+    small tilt).
+
+    Scale-invariant by design: the caller passes `min_samples` as a fraction of
+    the total sample count, so the same setting works on a 45mm pin and a 1.5m
+    panel. Deterministic (smallest-first, no RNG). Terminates because the group
+    count strictly decreases each merge; stops once every survivor is big enough
+    (or only one group remains).
+
+    Returns (groups, means) with the small groups absorbed.
+    """
+    groups = [list(g) for g in groups]
+    means = [np.asarray(m, dtype=float) for m in means]
+    while len(groups) > 1:
+        sizes = [len(g) for g in groups]
+        small = int(np.argmin(sizes))
+        if sizes[small] >= min_samples:
+            break  # every remaining group is large enough
+        # nearest OTHER group by mean-normal alignment
+        target, best_dot = -1, -2.0
+        for t in range(len(groups)):
+            if t == small:
+                continue
+            d = float(np.dot(means[small], means[t]))
+            if d > best_dot:
+                target, best_dot = t, d
+        groups[target].extend(groups[small])
+        means[target] = _mean_unit_normal(normals, groups[target])
+        del groups[small]
+        del means[small]
+    return groups, means
+
+
 def _inplane_axes(normal):
     """
     Two orthonormal axes (u, v) spanning the plane perpendicular to `normal`.
@@ -183,6 +239,8 @@ def generate_raster_waypoints(
     raster_spacing_mm,
     along_track_mm,
     face_angle_tol_deg=30.0,
+    min_group_frac=0.02,
+    min_line_points=2,
     table_up_mm=0.0,
     up_axis=1,
     log=print,
@@ -206,6 +264,15 @@ def generate_raster_waypoints(
             fall within this angle share a face group. Smaller = more, tighter
             faces; larger = fewer, coarser ones. (Belongs in config once
             system_config.yaml exists; passed in explicitly for now.)
+        min_group_frac: minimum size of a face group, as a FRACTION of the total
+            sample count. Groups smaller than this are folded into their
+            nearest-normal neighbour (_merge_small_groups) -- this is what stops a
+            fillet/chamfer between two faces from shattering into a spray of
+            2-3 point clumps. Scale-invariant, so the same value works on a small
+            pin and a large panel. Set 0 to disable merging.
+        min_line_points: a raster line with fewer than this many surviving points
+            is dropped rather than emitted -- a 1-point "line" is just an isolated
+            dot, never a scan sweep. The dropped count is reported via `log`.
         table_up_mm: the table-top height along the part frame's UP axis. Probe
             waypoints BELOW this are physically unreachable (they'd be inside /
             under the table), so they are DROPPED -- never silently kept, never
@@ -227,9 +294,22 @@ def generate_raster_waypoints(
 
     groups, group_means = _group_by_normal(normals, face_angle_tol_deg)
 
+    # Fold fillet/chamfer fragments into their parent face BEFORE rastering, so a
+    # transition surface never becomes a spray of 2-3 point clumps. Threshold is a
+    # fraction of the sample count -> scale-invariant across part sizes.
+    if min_group_frac > 0:
+        min_samples = max(1, int(min_group_frac * len(points)))
+        n_before = len(groups)
+        groups, group_means = _merge_small_groups(groups, group_means, normals, min_samples)
+        if len(groups) < n_before:
+            log(f"[waypoint_generator] merged {n_before - len(groups)} small face "
+                f"group(s) into neighbours (< {min_samples} samples each) -- "
+                f"{len(groups)} face(s) left")
+
     waypoints = []
     line_id = 0    # running, unique across every face group
     dropped = 0    # probe poses below the table (unreachable) -- dropped, counted
+    dropped_short = 0  # points in sub-min_line_points lines -- dropped, counted
 
     for members, mean_normal in zip(groups, group_means):
         idx = np.asarray(members, dtype=int)
@@ -281,6 +361,7 @@ def generate_raster_waypoints(
             kept_normals = line_normals[kept_indices]
             n = len(kept_points)
 
+            line_wps = []   # this line's waypoints; emitted only if long enough
             for i in range(n):
                 normal = kept_normals[i] / (np.linalg.norm(kept_normals[i]) + 1e-12)
                 # Offset along the point's OWN normal (more accurate than the
@@ -309,7 +390,7 @@ def generate_raster_waypoints(
                 if np.linalg.norm(travel) < 1e-9:
                     travel = travel_axis_vec
 
-                waypoints.append(
+                line_wps.append(
                     Waypoint(
                         position=probe_position,
                         normal=normal,
@@ -317,10 +398,22 @@ def generate_raster_waypoints(
                         line_id=line_id,
                     )
                 )
-            line_id += 1
+
+            # Emit the line only if it is a real sweep. A sub-min_line_points line
+            # (typically a lone survivor at a face edge, or after table drops) is
+            # an isolated dot, not a scan line -- drop it and keep line_id
+            # contiguous so downstream smoothing sees no phantom empty lines.
+            if len(line_wps) >= min_line_points:
+                waypoints.extend(line_wps)
+                line_id += 1
+            else:
+                dropped_short += len(line_wps)
 
     if dropped:
         log(f"[waypoint_generator] dropped {dropped} waypoint(s) below the table "
             f"(up axis {up_axis} < {table_up_mm} mm) -- unreachable, not kept")
+    if dropped_short:
+        log(f"[waypoint_generator] dropped {dropped_short} waypoint(s) in "
+            f"lines shorter than {min_line_points} point(s) -- isolated dots, not sweeps")
 
     return waypoints

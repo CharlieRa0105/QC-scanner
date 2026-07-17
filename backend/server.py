@@ -70,6 +70,10 @@ SCANPATH_FILE = DATA_DIR / "scanpath_arm.json"
 # GET /api/viewer_bundle.
 VIEWER_BUNDLE_FILE = DATA_DIR / "viewer_bundle.json"
 
+# Last part planned + the orientation it was planned at, so the viewport can
+# re-plan (re-fit the dome) when the operator reorients/moves the part.
+LAST_PLAN = {"part_id": None, "orient_deg": None}
+
 
 def _load_qc_config():
     """Merged YAML config for the UI (workspace box, planner defaults, debug
@@ -159,12 +163,28 @@ class QCRequestHandler(SimpleHTTPRequestHandler):
         if route == "/api/robot/joints":
             self._send_json(200, ROBOT.joints())
             return
+        if route == "/api/robot/log":
+            # Live arm-comms feed for the debug monitor: every command + response
+            # that went through the bridge log, since ?since=<seq>.
+            from urllib.parse import parse_qs, urlparse
+            since = (parse_qs(urlparse(self.path).query).get("since") or ["0"])[0]
+            self._send_json(200, ROBOT.log_since(since))
+            return
+
         if route == "/api/robot/follow_status":
             self._send_json(200, ROBOT.follow_status())
             return
         # Merged system+local config (workspace box, planner + debug defaults).
         if route == "/api/config":
-            self._send_json(200, {"ok": True, "config": _load_qc_config()})
+            # Report the EFFECTIVE arm-base-to-table gap so a fresh viewer matches
+            # the backend even after a runtime table-height change / env override.
+            cfg = _load_qc_config()
+            try:
+                cfg.setdefault("workspace", {}).setdefault("mount", {})["height_mm"] = \
+                    ROBOT.mount_height_mm()
+            except Exception:  # noqa: BLE001
+                pass
+            self._send_json(200, {"ok": True, "config": cfg})
             return
         # Part mesh + scan path + mount (table frame) for the 3D viewer.
         if route == "/api/viewer_bundle":
@@ -218,13 +238,18 @@ class QCRequestHandler(SimpleHTTPRequestHandler):
             f.write(raw)
         self._send_json(200, {"ok": True, "file": fn})
 
-    def _handle_plan(self, part_id):
+    def _handle_plan(self, part_id, orient_deg=None):
         """Regenerate the scan path + viewer bundle for a part by running the
         existing planner CLIs as subprocesses (no planner code in this backend;
-        planning belongs in the PathPlanner ROS node -- this is the demo slice)."""
+        planning belongs in the PathPlanner ROS node -- this is the demo slice).
+
+        orient_deg: optional [rx,ry,rz] the operator reoriented the part by -- the
+        dome planner re-fits for that pose, so rotating the part yields a new path."""
         if not part_id:
             self._send_json(400, {"ok": False, "error": "partId required"})
             return
+        LAST_PLAN["part_id"] = part_id           # remember for re-plan-on-reorient
+        LAST_PLAN["orient_deg"] = orient_deg
         cad = next((p for p in sorted(CAD_DIR.iterdir())
                     if p.stem == part_id and p.suffix.lower() in (".step", ".stp", ".stl", ".obj")), None)
         if cad is None:
@@ -233,8 +258,28 @@ class QCRequestHandler(SimpleHTTPRequestHandler):
         import subprocess
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         part_json = DATA_DIR / "_plan_part.json"
+        # Scale raster density to the part's surface area so small parts stay
+        # densely covered (see plan_path.py --target-waypoints). Configurable via
+        # QC_TARGET_WAYPOINTS; default 400. Set 0 to fall back to fixed FOV spacing.
+        target_wp = os.environ.get("QC_TARGET_WAYPOINTS", "400")
+        # Planner selection (QC_PLANNER): default 'dome' = the enclosing-hemisphere
+        # dome raster (plan_hemisphere.py) -- scanner sweeps a dome around the part.
+        # Others: 'surround' = multi-view lawnmower (all sides, plan_surround.py);
+        # 'lawn' = top-surface only; 'contour' = plane-slice rings; 'grid' = old
+        # face-group raster. All emit the same ScanPath JSON.
+        planner = {"grid": "plan_path.py", "contour": "plan_contour.py",
+                   "lawn": "plan_lawn.py", "surround": "plan_surround.py"}.get(
+            os.environ.get("QC_PLANNER", "dome"), "plan_hemisphere.py")
+        plan_cmd = [sys.executable, f"scripts/{planner}", str(cad), str(part_json)]
+        # --target-waypoints only exists on the area-scaled planners; the dome
+        # (plan_hemisphere) derives spacing from the scanner footprint instead.
+        if target_wp and target_wp != "0" and planner != "plan_hemisphere.py":
+            plan_cmd += ["--target-waypoints", target_wp]
+        # operator reorientation -> re-fit the dome (hemisphere planner only)
+        if orient_deg and planner == "plan_hemisphere.py":
+            plan_cmd += ["--orient-deg", ",".join(str(float(a)) for a in orient_deg[:3])]
         steps = [
-            [sys.executable, "scripts/plan_path.py", str(cad), str(part_json)],
+            plan_cmd,
             [sys.executable, "scripts/scanpath_convert.py", str(part_json), str(SCANPATH_FILE)],
             [sys.executable, "scripts/export_viewer_bundle.py", str(cad), str(SCANPATH_FILE), str(VIEWER_BUNDLE_FILE)],
         ]
@@ -275,7 +320,17 @@ class QCRequestHandler(SimpleHTTPRequestHandler):
         # ---- (re)generate a scan path for a part (demo-slice: subprocess the
         # existing planner CLIs; no planner code runs in this stdlib backend) ----
         if route == "/api/plan":
-            self._handle_plan(payload.get("partId", ""))
+            self._handle_plan(payload.get("partId", ""), payload.get("orientRpyDeg"))
+            return
+
+        # ---- re-plan the CURRENT part at a new orientation (operator reoriented/
+        # moved the part in the viewport -> regenerate the path/dome for that pose) ----
+        if route == "/api/plan/reorient":
+            pid = LAST_PLAN.get("part_id")
+            if not pid:
+                self._send_json(400, {"ok": False, "error": "no part planned yet"})
+                return
+            self._handle_plan(pid, payload.get("orientRpyDeg"))
             return
 
         # ---- robot connect / disconnect ----
@@ -415,20 +470,26 @@ class QCRequestHandler(SimpleHTTPRequestHandler):
 
         # ---- NO-MOTION preview: register + reachability-check the scan path for
         # a given orientation, returned in the viewer frame ("Generate path").
+        if route == "/api/robot/table_height":
+            # NO MOTION: set the arm-base-to-table gap H (mm) -- the table-height
+            # knob the debug viewport drives. Reachability preview uses it live.
+            result = ROBOT.set_mount_height_mm(payload.get("mm"))
+            self._send_json(200 if result.get("ok") else 400, result)
+            return
+
         if route == "/api/robot/scan_preview":
-            waypoints = payload.get("waypoints")
-            if not waypoints:
-                try:
-                    with open(SCANPATH_FILE) as f:
-                        waypoints = json.load(f).get("waypoints", [])
-                except FileNotFoundError:
-                    self._send_json(400, {"ok": False, "error": f"no {SCANPATH_FILE.name}"})
-                    return
-            orient_deg = payload.get("orientRpyDeg") or [0, 0, 0]
-            orient_rpy = [math.radians(float(a)) for a in orient_deg[:3]]
+            # The viewer sends the planner path it is ALREADY drawing (probe
+            # positions + surface targets, in the viewer/table frame); the bridge
+            # only reachability-tags those exact poses. This keeps preview and the
+            # drawn path a single source of truth -- no separate overhead raster.
+            poses = payload.get("poses") or []
+            if not poses:
+                self._send_json(400, {"ok": False,
+                                      "error": "no poses to preview (the viewer sends the drawn path)"})
+                return
             try:
-                result = ROBOT.scan_preview(waypoints, orient_rpy=orient_rpy,
-                                            incidence_deg=float(payload.get("incidenceDeg", 10.0)))
+                result = ROBOT.scan_preview(
+                    poses, incidence_deg=float(payload.get("incidenceDeg", 10.0)))
                 self._send_json(200, result)
             except Exception as e:  # noqa: BLE001
                 traceback.print_exc()

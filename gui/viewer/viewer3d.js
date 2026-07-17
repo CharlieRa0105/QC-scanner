@@ -49,7 +49,9 @@
     const cfg = opts.config;                        // resolved config (fetchConfig())
     const ws = cfg.workspace;
     const dims = ws.dims_mm.map((v) => v / 1000);   // box, metres
-    const H = ws.mount.base_xyz_mm[2] / 1000;       // mount height above table
+    // arm-base-to-table gap (metres). Prefer the backend's EFFECTIVE height (honours
+    // runtime table-height changes / env overrides); fall back to the static config.
+    let H = (ws.mount.height_mm != null ? ws.mount.height_mm : ws.mount.base_xyz_mm[2]) / 1000;
 
     const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
     renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -118,11 +120,14 @@
       const loader = new THREE.STLLoader();
       const mat = new THREE.MeshStandardMaterial({ color: 0xc8ccd2, metalness: 0.55, roughness: 0.45 });
 
-      // mount: table -> arm base (height + roll come from the URDF/config)
+      // mount: table -> arm base (height + roll come from the URDF/config).
+      // Kept on `arm` so setMountHeight() can move it live when the table height
+      // changes.
       const mount = new THREE.Object3D();
       mount.position.set(0, 0, H);
       mount.rotation.set(Math.PI, 0, 0, 'ZYX');
       armGroup.add(mount);
+      arm.mount = mount;
 
       let parent = mount;
       for (const link of chain.links) {
@@ -235,16 +240,31 @@
       waypoints = (wps || []).map((w) => ({
         pos: new THREE.Vector3(...w.position),
         target: new THREE.Vector3(...(w.target || w.position)),
+        reachable: w.reachable,                 // undefined until a preview tags it
+        line: w.line_id == null ? 0 : w.line_id,
       }));
       if (!waypoints.length) { scanner && (scanner.visible = false); return; }
-      pathGroup.add(new THREE.Line(
-        new THREE.BufferGeometry().setFromPoints(waypoints.map((w) => w.pos)),
-        new THREE.LineBasicMaterial({ color: PATH })));
+      // ONE polyline per raster line (line_id): the path snakes along each line
+      // but never draws a segment jumping across a line/face boundary -- that
+      // cross-boundary jump is what made a clean multi-face path look scribbled.
+      let run = [waypoints[0]];
+      const flushRun = () => {
+        if (run.length > 1) pathGroup.add(new THREE.Line(
+          new THREE.BufferGeometry().setFromPoints(run.map((w) => w.pos)),
+          new THREE.LineBasicMaterial({ color: PATH })));
+      };
+      for (let i = 1; i < waypoints.length; i++) {
+        if (waypoints[i].line !== run[0].line) { flushRun(); run = []; }
+        run.push(waypoints[i]);
+      }
+      flushRun();
       const dot = new THREE.SphereGeometry(0.0025, 8, 8);
       const dm = new THREE.MeshBasicMaterial({ color: PATH });
+      const um = new THREE.MeshBasicMaterial({ color: 0xd64545 });   // known-unreachable
       const am = new THREE.LineBasicMaterial({ color: AIM, transparent: true, opacity: 0.55 });
       waypoints.forEach((w) => {
-        const s = new THREE.Mesh(dot, dm); s.position.copy(w.pos); pathGroup.add(s);
+        const s = new THREE.Mesh(dot, w.reachable === false ? um : dm);
+        s.position.copy(w.pos); pathGroup.add(s);
         aimGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([w.pos, w.target]), am));
       });
       if (!scanner) {
@@ -321,6 +341,15 @@
     function tableToArmMm(v) { return [v.x * 1000, -v.y * 1000, (H - v.z) * 1000]; }
     function armMmToTable(a) { return new THREE.Vector3(a[0] / 1000, -a[1] / 1000, H - a[2] / 1000); }
 
+    // Change the arm-base-to-table gap (mm) live -- the table-height knob. Moves
+    // the arm mount; the part stays grounded at z=0, so the gap to the arm changes.
+    // Conversions above read H by closure, so they update automatically.
+    function setMountHeight(mm) {
+      H = mm / 1000;
+      if (arm.mount) arm.mount.position.z = H;
+    }
+    function mountHeightMm() { return H * 1000; }
+
     // ---------- loop / dispose -------------------------------------------------
     let lastW = 0, lastH = 0, raf = 0, disposed = false, last = performance.now();
     function tick(now) {
@@ -366,6 +395,7 @@
       buildPart, buildPath, placeAt, play, waypoints: () => waypoints, orientPart,
       partGroup,
       setLayer, setView, frameView, tableToArmMm, armMmToTable,
+      setMountHeight, mountHeightMm,
       dispose,
     };
   }

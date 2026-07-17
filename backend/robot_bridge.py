@@ -92,6 +92,14 @@ SCAN_OFFSET_M = tuple(float(v) for v in
 # move_pose at low speed with Ra + the E-stop first, then set QC_ALLOW_SCAN_TRACE=1
 # to enable. This is separate from QC_ALLOW_MOTION (which gates jog/home/etc.).
 ALLOW_SCAN_TRACE = os.environ.get("QC_ALLOW_SCAN_TRACE", "0").lower() not in ("0", "false", "no", "")
+
+# The scanner looks along tool +Z (confirmed on the real arm), so the flange normal
+# must point AT the part. Default (inward=1): aim +Z from the pose toward the target
+# (the hemisphere centre) -- flange face on the dome, body OUTSIDE, looking in, which
+# is what a dome scan requires. Executed POINT-TO-POINT (see scan_trace), since the
+# blended sweep can't do these orientations. Set QC_SCAN_LOOK_INWARD=0 to aim +Z
+# outward instead (scanner would look -Z; only useful if the sensor is remounted).
+SCAN_LOOK_INWARD = os.environ.get("QC_SCAN_LOOK_INWARD", "1").lower() not in ("0", "false", "no", "")
 # TEST-ONLY mock backend (QC_ARM_MOCK=1): used to self-verify motion flows
 # without hardware (the refactor rule: prove against the mock first). Default
 # OFF -- a normal session always talks to the real SR5 and never fakes a
@@ -146,17 +154,33 @@ def _call_with_timeout(fn, timeout_s, default):
 
 
 def _mount_height_m():
-    """Arm-base height above the table, from config (fallback: the cell's known
-    1.2 m). Read lazily so the stdlib server still runs without PyYAML/config."""
+    """Arm-base-to-table GAP H (metres): the vertical distance from the table top
+    up to the arm base. This is THE reachability-relevant table-height knob -- a
+    lower table (bigger H) puts the part farther from the overhead base; a higher
+    table (smaller H) brings it closer.
+
+    Derived as (base_z - table_z) from config; QC_TABLE_Z_MM overrides the table
+    height for a quick change without editing config. Read lazily so the stdlib
+    server still runs without PyYAML/config (fallback: the cell's known 1.2 m)."""
+    base_z, table_z = 1200.0, 0.0
     try:
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
         from libs.qc_config import load_config
-        return float(load_config()["workspace"]["mount"]["base_xyz_mm"][2]) / 1000.0
+        cfg = load_config()
+        base_z = float(cfg["workspace"]["mount"]["base_xyz_mm"][2])
+        table_z = float(cfg["workspace"].get("table_z_mm", 0.0))
     except Exception:  # noqa: BLE001
-        return 1.2
+        pass
+    env = os.environ.get("QC_TABLE_Z_MM")
+    if env is not None:
+        try:
+            table_z = float(env)
+        except ValueError:
+            pass
+    return (base_z - table_z) / 1000.0
 
 
-MOUNT_H = _mount_height_m()
+MOUNT_H = _mount_height_m()   # mutable at runtime via RobotBridge.set_mount_height_mm
 
 # NOTE (removed): a geometric "reach sphere" preflight used to refuse poses
 # farther than 919 mm from the base ORIGIN. That model is WRONG -- the SR5's
@@ -328,6 +352,7 @@ class RobotBridge:
         self._note = ""
         self._fb2er = None         # (R,t) flangeInBase->endInRef, self-calibrated at connect
         self._logbuf = []          # bounded ring buffer of backend log lines (see _blog)
+        self._logn = 0             # total lines ever logged (monotonic seq for the live monitor)
         self._unreach = 0          # consecutive failed liveness pings (see status())
         self._last_tick = time.monotonic()   # for mock sim time (see joints())
         # Set to interrupt an in-flight follow_path (by stop/estop/abort). It's
@@ -352,10 +377,26 @@ class RobotBridge:
             print(line, flush=True)
             buf = self._logbuf
             buf.append(line)
+            self._logn += 1
             if len(buf) > 500:
                 del buf[:-500]
         except Exception:  # noqa: BLE001
             pass
+
+    def log_since(self, since=0):
+        """Backend log lines with sequence > `since`, for the live arm-comms monitor.
+        Returns {lines, seq}: `seq` is the newest line's sequence (poll with it next).
+        Every command sent to the arm and its response flow through _blog, so this is
+        a complete live feed. If the caller has fallen behind the 500-line ring, it
+        gets whatever remains (never crashes on a stale `since`)."""
+        with self._lock:
+            start = self._logn - len(self._logbuf)     # seq of buf[0]
+            try:
+                since = int(since)
+            except (TypeError, ValueError):
+                since = 0
+            first = max(0, since - start)
+            return {"ok": True, "lines": list(self._logbuf[first:]), "seq": self._logn}
 
     def connect(self, ip=None):
         """Open a connection to the REAL SR5. There is no mock — if the arm
@@ -844,28 +885,70 @@ class RobotBridge:
             p_fb = list(p_er)
         return [p_fb[0], -p_fb[1], MOUNT_H - p_fb[2]]   # fb->scene (involution)
 
-    def scan_preview(self, waypoints, orient_rpy=(0.0, 0.0, 0.0), incidence_deg=10.0):
-        """NO MOTION. Register the scan path for `orient_rpy` (footprint anchored at
-        home flange -> table + SCAN_OFFSET_M, aim straight down at the part) and
-        report each pose's reachability (calcIk within the cone),
-        returned in the VIEWER scene frame so 'Generate path' can draw exactly what
-        would run. {ok, poses:[{position,target,reachable}], n, n_reachable}."""
+    def mount_height_mm(self):
+        """The current arm-base-to-table gap H, in mm (the table-height knob)."""
+        return MOUNT_H * 1000.0
+
+    def set_mount_height_mm(self, mm):
+        """Set the arm-base-to-table gap H (mm) at runtime -- i.e. change the table
+        height. Updates MOUNT_H, which every table<->arm conversion reads live
+        (reachability preview, grounding, pose command frame). NO MOTION. Refused
+        mid-scan so a running trace's frame can't shift under it."""
+        global MOUNT_H
+        with self._lock:
+            if self._follow["running"]:
+                return {"ok": False, "error": "cannot change table height while a scan/trace is running"}
+            try:
+                h = float(mm)
+            except (TypeError, ValueError):
+                return {"ok": False, "error": "height (mm) must be a number"}
+            if not (100.0 <= h <= 2000.0):
+                return {"ok": False, "error": "height must be 100-2000 mm (arm-base-to-table gap)"}
+            MOUNT_H = h / 1000.0
+            self._blog(f"[bridge] table height changed: arm-base-to-table gap H = {h:.0f} mm")
+            return {"ok": True, "mountHeightMm": h}
+
+    def scan_preview(self, poses, incidence_deg=10.0):
+        """NO MOTION. Reachability-annotate the PLANNER path itself -- the exact
+        waypoints the viewer draws -- instead of building a separate overhead
+        raster. Each input pose is a probe {position, target[, line_id]} in the
+        viewer/table frame (scene == table: _table_to_arm_base is the involution
+        _er_to_scene inverts). For each pose the tool +Z aims along the OUTWARD
+        normal (probe position minus surface target); position + aim are mapped
+        into endInRef and tested for a controller IK solution within +/-
+        incidence_deg (calcIk, with the cone-tilt fallback in _cone_reachable).
+        The SAME poses are echoed back, each tagged `reachable`, so the viewer
+        recolours them in place -- no geometry is swapped, so the preview never
+        flickers to a different-looking path.
+
+        This REPLACES the old _build_scan_poses overhead-raster preview: the planner
+        path is now the single source of truth for what 'Generate path' shows.
+        (scan_trace still traces the overhead raster until the MOTION path is
+        reconciled the same way -- that step changes what the arm does and needs
+        Ra's explicit go-ahead.) Returns
+        {ok, poses:[{position,target,reachable,line_id}], n, n_reachable}."""
         with self._lock:
             if self._arm is None:
                 return {"ok": False, "error": "not connected"}
-            built = self._build_scan_poses(waypoints, orient_rpy)
-            if not built:
-                return {"ok": False, "error": "could not read home pose to anchor the scan"}
-            poses, nreach = [], 0
-            for (p_er, aim_rpy, lid) in built:
+            out, nreach = [], 0
+            for p in poses:
+                pos = [float(v) for v in p["position"]]
+                tgt = [float(v) for v in (p.get("target") or p["position"])]
+                # Same aim convention as scan_trace (SCAN_LOOK_INWARD) so preview
+                # reachability matches what actually runs.
+                if SCAN_LOOK_INWARD:
+                    d = [tgt[i] - pos[i] for i in range(3)]
+                else:
+                    d = [pos[i] - tgt[i] for i in range(3)]
+                if sum(c * c for c in d) < 1e-12:
+                    d = [0.0, 0.0, 1.0]
+                aim_rpy = _R_to_rpy(_look_along_z(_vnorm(self._dir_table_to_er(d))))
+                p_er = self._endinref_point(pos)
                 reachable = self._cone_reachable(p_er, aim_rpy, incidence_deg) is not None
                 nreach += 1 if reachable else 0
-                nrm = [_rpy_to_R(aim_rpy)[i][2] for i in range(3)]         # +Z = outward normal
-                t_er = [p_er[i] - 0.3 * nrm[i] for i in range(3)]          # surface point
-                poses.append({"position": self._er_to_scene(p_er),
-                              "target": self._er_to_scene(t_er),
-                              "reachable": reachable})
-        return {"ok": True, "poses": poses, "n": len(poses), "n_reachable": nreach}
+                out.append({"position": pos, "target": tgt,
+                            "reachable": reachable, "line_id": p.get("line_id", 0)})
+        return {"ok": True, "poses": out, "n": len(out), "n_reachable": nreach}
 
     def start_scan_trace(self, waypoints, incidence_deg=10.0, speed_mms=None,
                          orient_rpy=(0.0, 0.0, 0.0)):
@@ -890,13 +973,21 @@ class RobotBridge:
                 with self._lock:
                     self._follow["completed"] = done
                     self._follow["total"] = total
-            rep = self.scan_trace(waypoints, incidence_deg=incidence_deg,
-                                  speed_mms=speed_mms, orient_rpy=orient_rpy,
-                                  on_progress=_progress)
+            try:
+                rep = self.scan_trace(waypoints, incidence_deg=incidence_deg,
+                                      speed_mms=speed_mms, orient_rpy=orient_rpy,
+                                      on_progress=_progress)
+            except Exception as e:  # noqa: BLE001
+                # A crash here must NEVER leave running=True -- that would wedge the
+                # arm (every later command refused with "a path is already running").
+                self._blog(f"[bridge] scan_trace crashed: {e}")
+                rep = {"completed": 0, "total": len(waypoints), "aborted": False,
+                       "error": f"scan_trace crashed: {e}", "ok": False}
             with self._lock:
-                self._follow = {"running": False, "completed": rep["completed"],
-                                "total": rep["total"], "aborted": rep["aborted"],
-                                "error": rep["error"], "ok": rep["ok"]}
+                self._follow = {"running": False, "completed": rep.get("completed", 0),
+                                "total": rep.get("total", len(waypoints)),
+                                "aborted": rep.get("aborted", False),
+                                "error": rep.get("error"), "ok": rep.get("ok", False)}
 
         self._follow_thread = threading.Thread(target=_run, daemon=True)
         self._follow_thread.start()
@@ -928,15 +1019,32 @@ class RobotBridge:
             if self._kind == "real" and not ALLOW_SCAN_TRACE:
                 return _report(False, 0, error="scan tracing disabled (QC_ALLOW_SCAN_TRACE=1)")
 
-        # Register the whole path to the part placement (reads home, anchors,
-        # orients, aims) -> endInRef aim poses.
+        # Trace the ACTUAL planned path (the waypoints the viewer shows), NOT a
+        # separately-built overhead raster. Each waypoint is a probe {position,
+        # target, line_id} in the table frame; the tool +Z aims along the outward
+        # normal (probe - target). This mirrors scan_preview exactly, so what the
+        # arm traces is what was previewed -- no more "it runs a grid".
         with self._lock:
             if self._arm is None:
                 return _report(False, 0, error="not connected")
-            built = self._build_scan_poses(waypoints, orient_rpy)
+            built = []
+            for wp in waypoints:
+                pos = [float(v) for v in wp["position"]]
+                tgt = [float(v) for v in (wp.get("target") or wp["position"])]
+                # Aim the scanner's look axis at the part. Which tool axis that is is
+                # set by SCAN_LOOK_INWARD (see the constant): default aims +Z outward
+                # (scanner looks -Z at the part) -- the version the SR5 can execute.
+                if SCAN_LOOK_INWARD:
+                    d = [tgt[i] - pos[i] for i in range(3)]    # +Z toward the part
+                else:
+                    d = [pos[i] - tgt[i] for i in range(3)]    # +Z away; scanner -Z at the part
+                if sum(c * c for c in d) < 1e-12:
+                    d = [0.0, 0.0, 1.0]
+                aim_rpy = _R_to_rpy(_look_along_z(_vnorm(self._dir_table_to_er(d))))
+                built.append((self._endinref_point(pos), aim_rpy, wp.get("line_id", 0)))
         if not built:
             return _report(False, 0, error="no scan poses (empty part path)")
-        total = len(built)                 # progress denominator = raster points
+        total = len(built)                 # progress denominator = planned waypoints
 
         # group consecutive built poses by line_id, preserving order
         lines = []
@@ -977,33 +1085,53 @@ class RobotBridge:
                     on_progress(completed, total)
                 continue
 
-            # Reposition to the line start (MoveJ, arrive at the scan orientation),
-            # then run the whole line as one continuous blended MoveL sweep.
+            # Reposition to the ring start (MoveJ go-to, hold orientation, settle).
             t0, rpy0 = poses[0]
             q0 = _R_to_quat(_rpy_to_R(rpy0))
             with self._lock:
                 arm = self._arm
                 if arm is None:
                     return _report(False, completed, error="connection lost")
-                if not arm.move_pose(t0, q0, speed, linear=False, seed_conf=True):
-                    return _report(False, completed, error=f"line {lid}: reposition failed ({arm.get_status()})")
-            if not self._wait_settle(reach_timeout_s):
+                repositioned = arm.move_pose(t0, q0, speed, linear=False, seed_conf=True)
+            if repositioned and not self._wait_settle(reach_timeout_s):
                 return _report(False, completed, aborted=self._abort.is_set(),
                                error=f"line {lid}: reposition did not settle")
 
-            with self._lock:
-                arm = self._arm
-                if arm is None:
-                    return _report(False, completed, error="connection lost")
-                if not arm.move_pose_list(poses, speed):
-                    return _report(False, completed, error=f"line {lid}: sweep rejected ({arm.get_status()})")
-            if not self._wait_settle(reach_timeout_s):
-                return _report(False, completed, aborted=self._abort.is_set(),
-                               error=f"line {lid}: sweep did not complete")
+            # CONTINUOUS: one blended MoveJ sweep through the ring -- the arm flows
+            # smoothly through the poses (turning zones, no stops), holding the
+            # flange aimed at the part. MoveJ (not MoveL) because the straight-line
+            # MoveL path between inward-facing poses is singular/unreachable.
+            swept = False
+            if repositioned:
+                with self._lock:
+                    arm = self._arm
+                    if arm is None:
+                        return _report(False, completed, error="connection lost")
+                    swept = arm.move_pose_list(poses, speed, linear=False)
+                if swept and not self._wait_settle(reach_timeout_s):
+                    return _report(False, completed, aborted=self._abort.is_set(),
+                                   error=f"line {lid}: sweep did not complete")
+
+            # Fallback: if the blended sweep would not start, trace the ring
+            # point-to-point so the scan still completes (just not as smooth).
+            if not swept:
+                self._blog(f"[bridge] line {lid}: blended sweep unavailable -> point-to-point")
+                for (p_er, rpy) in poses:
+                    if self._abort.is_set():
+                        return _report(False, completed, aborted=True, error="aborted")
+                    with self._lock:
+                        arm = self._arm
+                        if arm is None:
+                            return _report(False, completed, error="connection lost")
+                        moved = arm.move_pose(p_er, _R_to_quat(_rpy_to_R(rpy)),
+                                              speed, linear=False, seed_conf=True)
+                    if moved and not self._wait_settle(reach_timeout_s):
+                        return _report(False, completed, aborted=self._abort.is_set(),
+                                       error=f"line {lid}: move did not settle")
 
             completed += len(items)
             if on_progress:
-                on_progress(completed, total)
+                on_progress(min(completed, total), total)
 
         return _report(True, completed)
 

@@ -40,6 +40,7 @@ Usage:
 import argparse
 import datetime
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -52,7 +53,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from libs.path_planning.cad_loader import load_cad
 from libs.path_planning.incidence_cone_modifier import apply_incidence_cone_relaxation
-from libs.path_planning.normal_estimation import sample_surface
+from libs.path_planning.normal_estimation import sample_surface, surface_area
 from libs.path_planning.waypoint_generator import (
     generate_raster_waypoints,
     raster_spacing_from_fov,
@@ -129,7 +130,20 @@ def build_arg_parser():
     )
     parser.add_argument(
         "--along-track-mm", type=float, default=10.0,
-        help="waypoint spacing along each raster line",
+        help="waypoint spacing along each raster line (upper bound; --target-waypoints "
+        "may make it finer for a small part)",
+    )
+    parser.add_argument(
+        "--target-waypoints", type=int, default=None,
+        help="scale raster density to the part's SURFACE AREA: derive a base spacing "
+        "of sqrt(area / target) and use it wherever it is FINER than the FOV/along-track "
+        "spacing. Densifies small parts (so they don't collapse to one line/face) without "
+        "ever coarsening a large part or violating scan overlap. Unset = fixed spacing.",
+    )
+    parser.add_argument(
+        "--min-spacing-mm", type=float, default=2.0,
+        help="floor on the area-derived spacing, so a tiny part can't demand an absurd "
+        "waypoint count (only used with --target-waypoints)",
     )
     parser.add_argument(
         "--max-incidence-deg", type=float, default=25.0,
@@ -152,6 +166,17 @@ def build_arg_parser():
         "--face-angle-tol-deg", type=float, default=30.0,
         help="normal-clustering tolerance: samples whose normals fall within this "
         "angle share a face group (smaller = more, tighter faces)",
+    )
+    parser.add_argument(
+        "--min-group-frac", type=float, default=0.02,
+        help="minimum face-group size as a fraction of total samples; smaller "
+        "groups (fillet/chamfer fragments) are merged into the nearest face "
+        "(0 disables merging)",
+    )
+    parser.add_argument(
+        "--min-line-points", type=int, default=2,
+        help="drop raster lines with fewer than this many points (isolated dots, "
+        "not sweeps)",
     )
     parser.add_argument("--seed", type=int, default=0, help="surface-sampling RNG seed")
     return parser
@@ -184,13 +209,32 @@ def main():
             f"(from standoff={args.standoff_mm}, fov={args.fov_deg}, overlap={args.overlap})"
         )
 
+    # Surface-area-based density: derive a base spacing from the part's own area so
+    # small parts stay densely covered instead of collapsing to one line per face.
+    # Only ever makes spacing FINER (min against the coverage/along-track spacing),
+    # so a large part is unchanged and scan overlap is never reduced.
+    along_track = args.along_track_mm
+    if args.target_waypoints:
+        area = surface_area(vertices, faces)
+        s_area = max(args.min_spacing_mm, math.sqrt(area / args.target_waypoints))
+        new_spacing = min(spacing, s_area)
+        new_along = min(along_track, s_area)
+        print(
+            f"      area={area:.0f}mm^2, target={args.target_waypoints} wp -> "
+            f"area spacing {s_area:.2f}mm; using line={new_spacing:.2f}mm "
+            f"(was {spacing:.2f}), along-track={new_along:.2f}mm (was {along_track:.2f})"
+        )
+        spacing, along_track = new_spacing, new_along
+
     waypoints = generate_raster_waypoints(
         points,
         normals,
         standoff_mm=args.standoff_mm,
         raster_spacing_mm=spacing,
-        along_track_mm=args.along_track_mm,
+        along_track_mm=along_track,
         face_angle_tol_deg=args.face_angle_tol_deg,
+        min_group_frac=args.min_group_frac,
+        min_line_points=args.min_line_points,
     )
     n_lines = 1 + max((wp.line_id for wp in waypoints), default=-1)
     print(f"      {len(waypoints)} waypoints across {n_lines} raster lines")
@@ -229,7 +273,7 @@ def main():
         "standoff_mm": args.standoff_mm,
         "density": {
             "raster_spacing_mm": round(spacing, 3),
-            "along_track_mm": args.along_track_mm,
+            "along_track_mm": round(along_track, 3),
         },
         "generated": datetime.datetime.now().isoformat(timespec="seconds"),
         "source_cad": str(args.input),
@@ -239,6 +283,9 @@ def main():
             "max_incidence_deg": args.max_incidence_deg,
             "window": args.window,
             "face_angle_tol_deg": args.face_angle_tol_deg,
+            "min_group_frac": args.min_group_frac,
+            "min_line_points": args.min_line_points,
+            "target_waypoints": args.target_waypoints,
             "samples": args.samples,
             "mesh_size_mm": args.mesh_size_mm,
             "seed": args.seed,

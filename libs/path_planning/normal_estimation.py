@@ -66,6 +66,21 @@ def _face_geometry(vertices, faces):
     return unit_normal, centroid, area, v0, v1, v2
 
 
+def surface_area(vertices, faces):
+    """
+    Total surface area of the mesh, in the CAD's own units squared (mm^2).
+
+    Sum of every triangle's area. Used to scale the raster density to the
+    part: a small part has a small area, so deriving waypoint spacing from
+    area (spacing ~ sqrt(area / target_count)) keeps even a tiny part from
+    collapsing to one line per face -- see plan_path.py's --target-waypoints.
+    """
+    _, _, area, _, _, _ = _face_geometry(
+        np.asarray(vertices, dtype=float), np.asarray(faces, dtype=np.int64)
+    )
+    return float(area.sum())
+
+
 def sample_surface(vertices, faces, n_samples, seed=0):
     """
     Draw an area-weighted random sample of points across the mesh surface,

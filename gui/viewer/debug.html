@@ -48,9 +48,21 @@
       <button class="ghost" id="spinZ">Spin Z</button>
       <button class="ghost" id="flipReset" title="Reset orientation">⟲</button>
     </div>
-    <div class="grp-label">2 · Generate + scan</div>
-    <button class="ghost" id="genPathBtn">Generate path (preview + reachability)</button>
+    <div class="grp-label">Table height (arm → table gap, mm)</div>
+    <div class="row" style="align-items: center;">
+      <input type="range" id="tableH" min="400" max="1400" step="10" style="flex: 1;">
+      <span id="tableHVal" style="font-family: var(--font-mono); font-size: 11px; min-width: 54px; text-align: right; color: var(--ink-dim);"></span>
+    </div>
+
+    <label style="display: flex; align-items: center; gap: 7px; font-size: 12px; cursor: pointer;">
+      <input type="checkbox" id="showDome"> Show enclosing hemisphere
+    </label>
+
+    <div class="grp-label">2 · Preview + scan</div>
+    <button class="ghost" id="genPathBtn">Preview (replay in sim)</button>
     <button class="primary" id="scanArmBtn">Scan →&nbsp;arm</button>
+    <button class="ghost" id="commsBtn">Arm comms monitor ↗</button>
+
     <div class="grp-label">Camera</div>
     <div class="seg" id="viewSeg">
       <button data-view="orbit" class="on">Orbit</button>
