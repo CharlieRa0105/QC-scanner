@@ -61,12 +61,12 @@
       <button data-view="orbit" class="on">Orbit</button>
       <button data-view="scanner">Scanner POV</button>
     </div>
-    <div class="grp-label" style="margin-top:2px">Layers</div>
-    <div class="toggle on" data-layer="part"><span>Part</span><span class="sw"></span></div>
-    <div class="toggle on" data-layer="path"><span>Path</span><span class="sw"></span></div>
-    <div class="toggle on" data-layer="targets"><span>Aim rays</span><span class="sw"></span></div>
-    <div class="toggle on" data-layer="arm"><span>Robot arm</span><span class="sw"></span></div>
-    <div class="toggle on" data-layer="table"><span>Table + grid</span><span class="sw"></span></div>
+    <div class="grp-label" style="margin-top:2px">Fit primitive (re-plans)</div>
+    <div class="seg" id="fitSeg">
+      <button data-fit="dome" class="on">Hemisphere</button>
+      <button data-fit="box">Rectangle</button>
+    </div>
+    <div class="row"><button id="genPlanBtn" class="primary">Generate path</button></div>
 
     <div class="grp-label" style="margin-top:2px">Orient part (re-plans)</div>
     <div class="row">
@@ -82,10 +82,7 @@
       <span class="hval" id="tableHVal"></span>
     </div>
 
-    <label class="chk"><input type="checkbox" id="showDome"> Show hemisphere</label>
-
-    <div class="grp-label" style="margin-top:2px">Diagnostics</div>
-    <div class="row"><button id="commsBtn">Arm comms monitor ↗</button></div>
+    <label class="chk"><input type="checkbox" id="showDome"> Show fit shape</label>
   </div>
 
   <div id="transport" class="panel">

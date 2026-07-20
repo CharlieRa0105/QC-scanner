@@ -3,8 +3,9 @@
  *
  * Scene/arm/path/playback all live in the shared module viewer3d.js. This file
  * wires the page UI: transport (play/scrub), layer + camera toggles, and — ported
- * from the debug viewport — orient-the-part (which RE-PLANS the path for the new
- * pose), table height, show-hemisphere, Scan -> arm, and the live comms monitor.
+ * from the debug viewport — the fit primitive (hemisphere/rectangle), Generate
+ * path, orient-the-part (all of which RE-PLAN), table height, show-fit-shape, and
+ * the live comms monitor.
  */
 'use strict';
 
@@ -17,7 +18,8 @@ const setStatus = (t) => { $('statusText').textContent = t; };
   window.__viewer = v;
 
   // ---- load / reload the planned bundle (part + path + dome) ----------------
-  let scanWps = [], domeInfo = null, domeMesh = null;
+  let scanWps = [], domeInfo = null, domeMesh = null, boxInfo = null, boxMesh = null;
+  let primitive = 'dome';   // which fit shape the current bundle was planned on
   async function loadBundle() {
     const r = await fetch('/api/viewer_bundle');
     if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -25,8 +27,12 @@ const setStatus = (t) => { $('statusText').textContent = t; };
     if (bundle.part) v.buildPart(bundle.part);
     scanWps = bundle.waypoints || [];
     domeInfo = bundle.dome || null;
+    boxInfo = bundle.box || null;
+    primitive = bundle.primitive || (boxInfo ? 'box' : 'dome');
     drawPath();
     buildDome();
+    buildBox();
+    setFitActive(primitive);
     $('scrub').max = String(Math.max(0, scanWps.length - 1));
     return bundle;
   }
@@ -51,6 +57,27 @@ const setStatus = (t) => { $('statusText').textContent = t; };
     domeMesh.visible = !!($('showDome') && $('showDome').checked);
     v.scene.add(domeMesh);
   }
+  function buildBox() {
+    if (boxMesh) { v.scene.remove(boxMesh); boxMesh = null; }
+    if (!boxInfo) return;
+    const T = v.THREE;
+    const geo = new T.BoxGeometry(boxInfo.half_dims[0] * 2, boxInfo.half_dims[1] * 2, boxInfo.half_dims[2] * 2);
+    boxMesh = new T.Mesh(geo, new T.MeshBasicMaterial(
+      { color: 0x5b8dd6, transparent: true, opacity: 0.06, side: T.DoubleSide, depthWrite: false }));
+    boxMesh.add(new T.LineSegments(new T.EdgesGeometry(geo),
+      new T.LineBasicMaterial({ color: 0x5b8dd6, transparent: true, opacity: 0.5 })));
+    boxMesh.position.set(boxInfo.center[0], boxInfo.center[1], boxInfo.center[2]);
+    if (boxInfo.quaternion) {               // table-aligned box orientation (yaw)
+      const q = boxInfo.quaternion;
+      boxMesh.quaternion.set(q[0], q[1], q[2], q[3]);
+    }
+    boxMesh.visible = !!($('showDome') && $('showDome').checked);
+    v.scene.add(boxMesh);
+  }
+  function setFitActive(prim) {
+    const seg = $('fitSeg'); if (!seg) return;
+    seg.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.fit === prim));
+  }
 
   // ---- transport (play / reset / scrub) -------------------------------------
   v.play.onStep = (t, n) => { $('scrub').value = String(t); $('wptLabel').textContent = `${Math.round(t) + 1} / ${n}`; };
@@ -59,13 +86,11 @@ const setStatus = (t) => { $('statusText').textContent = t; };
   $('resetBtn').onclick = () => { v.play.on = false; $('playBtn').textContent = '▶ Play'; v.placeAt(0); };
   $('scrub').oninput = (e) => { v.play.on = false; $('playBtn').textContent = '▶ Play'; v.placeAt(parseFloat(e.target.value)); };
 
-  // ---- camera + layers ------------------------------------------------------
+  // ---- camera ---------------------------------------------------------------
+  // (Layer toggles live in the Debug viewport, not here.)
   $('viewSeg').querySelectorAll('button').forEach((b) => b.onclick = () => {
     $('viewSeg').querySelectorAll('button').forEach((x) => x.classList.remove('on'));
     b.classList.add('on'); v.setView(b.dataset.view);
-  });
-  document.querySelectorAll('.toggle[data-layer]').forEach((el) => el.onclick = () => {
-    const on = !el.classList.contains('on'); el.classList.toggle('on', on); v.setLayer(el.dataset.layer, on);
   });
 
   // ---- orient the part -> RE-PLAN the path for the new pose -----------------
@@ -112,15 +137,61 @@ const setStatus = (t) => { $('statusText').textContent = t; };
     };
   }
 
-  // ---- show hemisphere toggle ----------------------------------------------
+  // ---- show fit-shape toggle (whichever primitive is active) ----------------
   const dc = $('showDome');
-  if (dc) dc.onchange = () => { if (domeMesh) domeMesh.visible = dc.checked; };
+  if (dc) dc.onchange = () => {
+    if (domeMesh) domeMesh.visible = dc.checked;
+    if (boxMesh) boxMesh.visible = dc.checked;
+  };
+
+  // ---- fit primitive: hemisphere <-> rectangle -> RE-PLAN on the new shape --
+  // The path is regenerated on whichever primitive is selected (dome raster vs
+  // table-aligned box); the backend preserves orientation.
+  const fitSeg = $('fitSeg');
+  let refitting = false;
+  if (fitSeg) fitSeg.querySelectorAll('button').forEach((b) => b.onclick = async () => {
+    const prim = b.dataset.fit;
+    if (refitting || prim === primitive) return;
+    refitting = true;
+    setStatus(`re-planning on ${prim === 'box' ? 'rectangle' : 'hemisphere'}…`);
+    try {
+      const r = await (await fetch('/api/plan/primitive', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ primitive: prim }),
+      })).json();
+      if (!r.ok) { setStatus('re-plan failed: ' + (r.error || 'unknown')); setFitActive(primitive); return; }
+      await loadBundle();
+      v.frameView();
+      setStatus(`${scanWps.length} waypoints on ${primitive === 'box' ? 'rectangle' : 'hemisphere'}`);
+    } catch (e) { setStatus('re-plan error: ' + e.message); setFitActive(primitive); }
+    finally { refitting = false; }
+  });
+
+  // ---- generate path (explicit re-plan) -------------------------------------
+  // Regenerate the scan path for the current part on the currently-selected
+  // primitive, preserving orientation on the backend, then reload + redraw.
+  const genPlanBtn = $('genPlanBtn');
+  let generating = false;
+  if (genPlanBtn) genPlanBtn.onclick = async () => {
+    if (generating) return;
+    generating = true;
+    const label = primitive === 'box' ? 'rectangle' : 'hemisphere';
+    setStatus(`generating path on ${label}…`);
+    try {
+      const r = await (await fetch('/api/plan/primitive', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ primitive }),
+      })).json();
+      if (!r.ok) { setStatus('generate failed: ' + (r.error || 'unknown')); return; }
+      await loadBundle();
+      v.frameView();
+      setStatus(`${scanWps.length} waypoints generated on ${primitive === 'box' ? 'rectangle' : 'hemisphere'}`);
+    } catch (e) { setStatus('generate error: ' + e.message); }
+    finally { generating = false; }
+  };
 
   // (No "Scan -> arm" here: scanning is driven by the console's Run process.)
-
-  // ---- live arm-comms monitor ----------------------------------------------
-  const cb = $('commsBtn');
-  if (cb) cb.onclick = () => window.open('comms.html', 'qc_comms', 'width=780,height=640');
+  // (Arm comms monitor lives in the Debug viewport, not here.)
 
   // ---- sim arm mirrors the PHYSICAL arm (no IK) -----------------------------
   // The controller reports live joint angles (deg); we push them onto the sim arm

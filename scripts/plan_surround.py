@@ -129,6 +129,8 @@ def main():
         "standoff_mm": args.standoff_mm,
         "density": {"raster_spacing_mm": round(spacing, 3), "along_track_mm": round(along, 3)},
         "placement_R": [[round(float(c), 8) for c in row] for row in placement_R],
+        # placed-frame table plane (+Y up); read by scanpath_convert's clearance guard.
+        "table_up_mm": round(float(vertices[:, 1].min()), 4),
         "generated": datetime.datetime.now().isoformat(timespec="seconds"),
         "source_cad": str(args.input),
         "params": {

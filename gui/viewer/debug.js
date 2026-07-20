@@ -22,87 +22,120 @@ let ready = false;
   await v.buildArm('assets/arm/');
   let scanWps = [];                        // planner scan path (part frame)
   let domeInfo = null;                     // enclosing hemisphere {center,radius} (dome planner)
+  let boxInfo = null;                      // enclosing rectangle {center,half_dims} (box planner)
+  let primitive = 'dome';                  // which fit shape the current bundle was planned on
   try {
     const bundle = await (await fetch('/api/viewer_bundle')).json();
     if (bundle.part) v.buildPart(bundle.part);
     scanWps = bundle.waypoints || [];
     domeInfo = bundle.dome || null;
+    boxInfo = bundle.box || null;
+    primitive = bundle.primitive || (boxInfo ? 'box' : 'dome');
   } catch (e) { /* no part planned yet */ }
   v.frameView();
 
-  // ---------------- enclosing hemisphere (debug overlay, toggle) ------------
-  let domeMesh = null;
-  function buildDome() {
-    if (!domeInfo || domeMesh) return;
+  // ---------------- enclosing fit shape (debug overlay, toggle) -------------
+  // Draws whichever primitive the bundle was planned on -- the hemisphere (dome
+  // planner) or the rectangle (table-aligned box planner). Rebuilt on every
+  // (re)load so a primitive switch swaps the mesh. Both are FIXED in the table
+  // frame (the part flips INSIDE them).
+  let fitMesh = null;
+  function drawFit() {
+    if (fitMesh) { v.scene.remove(fitMesh); fitMesh = null; }
     const T = v.THREE;
-    const geo = new T.SphereGeometry(domeInfo.radius, 48, 24, 0, Math.PI * 2, 0, Math.PI / 2);
-    domeMesh = new T.Mesh(geo, new T.MeshBasicMaterial(
-      { color: 0x5b8dd6, transparent: true, opacity: 0.10, side: T.DoubleSide, depthWrite: false }));
-    domeMesh.add(new T.LineSegments(new T.WireframeGeometry(geo),
-      new T.LineBasicMaterial({ color: 0x5b8dd6, transparent: true, opacity: 0.28 })));
-    domeMesh.matrixAutoUpdate = false;     // we drive its matrix to follow the part
-    domeMesh.visible = false;
-    v.scene.add(domeMesh);
+    const show = !!($('showDome') && $('showDome').checked);
+    if (domeInfo) {
+      const geo = new T.SphereGeometry(domeInfo.radius, 48, 24, 0, Math.PI * 2, 0, Math.PI / 2);
+      fitMesh = new T.Mesh(geo, new T.MeshBasicMaterial(
+        { color: 0x5b8dd6, transparent: true, opacity: 0.10, side: T.DoubleSide, depthWrite: false }));
+      fitMesh.add(new T.LineSegments(new T.WireframeGeometry(geo),
+        new T.LineBasicMaterial({ color: 0x5b8dd6, transparent: true, opacity: 0.28 })));
+      fitMesh.rotation.x = Math.PI / 2;    // pole +Y -> +Z (flat face on table)
+      fitMesh.position.set(domeInfo.center[0], domeInfo.center[1], domeInfo.center[2]);
+    } else if (boxInfo) {
+      const geo = new T.BoxGeometry(boxInfo.half_dims[0] * 2, boxInfo.half_dims[1] * 2, boxInfo.half_dims[2] * 2);
+      fitMesh = new T.Mesh(geo, new T.MeshBasicMaterial(
+        { color: 0x5b8dd6, transparent: true, opacity: 0.06, side: T.DoubleSide, depthWrite: false }));
+      fitMesh.add(new T.LineSegments(new T.EdgesGeometry(geo),
+        new T.LineBasicMaterial({ color: 0x5b8dd6, transparent: true, opacity: 0.5 })));
+      fitMesh.position.set(boxInfo.center[0], boxInfo.center[1], boxInfo.center[2]);
+      if (boxInfo.quaternion) {             // table-aligned box orientation (yaw)
+        const q = boxInfo.quaternion;
+        fitMesh.quaternion.set(q[0], q[1], q[2], q[3]);
+      }
+    }
+    if (fitMesh) { fitMesh.visible = show; v.scene.add(fitMesh); }
   }
-  function updateDome() {
-    if (!domeMesh) return;
-    const T = v.THREE;
-    // FIXED in the table frame: pole +Y -> +Z so the flat face lies on the table,
-    // placed at the fitted centre. The dome does NOT follow the part's flip -- the
-    // part rotates INSIDE a fixed scan dome.
-    domeMesh.matrix.compose(
-      new T.Vector3(domeInfo.center[0], domeInfo.center[1], domeInfo.center[2]),
-      new T.Quaternion().setFromAxisAngle(new T.Vector3(1, 0, 0), Math.PI / 2),
-      new T.Vector3(1, 1, 1));
+  function setFitActive(prim) {
+    const seg = $('fitSeg'); if (!seg) return;
+    seg.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.fit === prim));
   }
-  buildDome(); updateDome();
+  drawFit(); setFitActive(primitive);
   const domeChk = $('showDome');
-  if (domeChk) domeChk.onchange = () => { if (domeMesh) domeMesh.visible = domeChk.checked; };
+  if (domeChk) domeChk.onchange = () => { if (fitMesh) fitMesh.visible = domeChk.checked; };
 
-  // ---------------- orient the part (90° flips, stays grounded) -------------
-  const R2D = 180 / Math.PI, D2R = Math.PI / 180;
-  let partQuat = new THREE.Quaternion();
-
-  function reground() {
-    // sit the (rotated) part on the table: shift Z so its lowest point is z=0
-    v.partGroup.position.set(0, 0, 0);
-    v.partGroup.quaternion.copy(partQuat);
-    v.partGroup.updateMatrixWorld(true);
-    const box = new THREE.Box3().setFromObject(v.partGroup);
-    if (isFinite(box.min.z)) v.partGroup.position.z = -box.min.z;
-    v.partGroup.updateMatrixWorld(true);
+  // ---------------- orient the part (90° flips -> RE-PLAN) ------------------
+  // Each flip RE-PLANS the scan for the new pose (like the main viewport), so the
+  // fitted shape + path always follow the part. (Rotating the mesh WITHOUT
+  // re-planning -- the old behaviour -- left the path around the previous pose, so
+  // the rotated mesh overlapped stale waypoints and they looked like they were
+  // inside the part.)
+  let orient = [0, 0, 0];            // accumulated rx,ry,rz degrees
+  let replanning = false;
+  async function reorient(dx, dy, dz, reset) {
+    if (replanning) return;
+    orient = reset ? [0, 0, 0] : [orient[0] + dx, orient[1] + dy, orient[2] + dz];
+    replanning = true;
+    setStatus(`re-planning at orient [${orient.join(', ')}]°…`);
+    try {
+      const r = await (await fetch('/api/plan/reorient', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ orientRpyDeg: orient }),
+      })).json();
+      if (!r.ok) { setStatus('re-plan failed: ' + (r.error || 'unknown')); return; }
+      await reloadBundle();
+      v.frameView();
+      setStatus(`re-planned — ${scanWps.length} waypoints at orient [${orient.join(', ')}]°`);
+    } catch (e) { setStatus('re-plan error: ' + e.message); }
+    finally { replanning = false; }
   }
-  function flip(axis, deg) {
-    partQuat.premultiply(new THREE.Quaternion().setFromAxisAngle(axis, deg * D2R));
-    reground();
-    // The scan path + dome are FIXED in the table frame (the dome already covers
-    // every orientation), so a flip rotates ONLY the part inside them -- the path
-    // is not dragged around, and no re-plan is needed.
-    setStatus('part rotated inside the fixed scan dome');
-  }
-  function orientDeg() {
-    const e = new THREE.Euler().setFromQuaternion(partQuat, 'XYZ');
-    return [e.x * R2D, e.y * R2D, e.z * R2D];
-  }
-  const X = new THREE.Vector3(1, 0, 0), Y = new THREE.Vector3(0, 1, 0), Z = new THREE.Vector3(0, 0, 1);
-  const wire = (id, ax, d) => { const b = $(id); if (b) b.onclick = () => flip(ax, d); };
-  wire('flipX', X, 90); wire('flipY', Y, 90); wire('spinZ', Z, 90);
+  const wire = (id, dx, dy, dz) => { const b = $(id); if (b) b.onclick = () => reorient(dx, dy, dz, false); };
+  wire('flipX', 90, 0, 0); wire('flipY', 0, 90, 0); wire('spinZ', 0, 0, 90);
   const rb = $('flipReset');
-  if (rb) rb.onclick = () => { partQuat = new THREE.Quaternion(); reground(); setStatus('orientation reset'); };
+  if (rb) rb.onclick = () => reorient(0, 0, 0, true);
 
   // ---------------- path preview + scan ------------------------------------
   let drawnPoses = [];                      // the planner path currently on screen
   function drawClientPath() {
-    // The scan path is a FIXED dome in the table frame (the bundle is grounded so it
-    // already sits on the table), NOT glued to the part's flip rotation. Draw the
-    // waypoints as-is; a part flip rotates only the part mesh, not this path.
-    // line_id is carried through so buildPath draws one polyline per ring.
+    // The bundle is grounded (already sits on the table) and is RE-PLANNED for the
+    // current orientation, so the path matches the part's pose. Draw the waypoints
+    // as-is; line_id is carried through so buildPath draws one polyline per ring.
     drawnPoses = scanWps
       .map((w) => ({ position: w.position, target: (w.target || w.position),
                      line_id: w.line_id == null ? 0 : w.line_id }))
       .filter((w) => w.position[2] >= -0.001);
     v.buildPath(drawnPoses);
+    drawArmPath();
     return drawnPoses.length;
+  }
+
+  // ORANGE arm-travel line: one continuous line through every waypoint in the
+  // order the arm visits them -- unlike the per-ring path polylines, this includes
+  // the jumps BETWEEN rings/faces, so it shows the arm's actual traversal. Drawn as
+  // a thin TUBE (not a GL line) so it renders BOLD -- WebGL ignores line width.
+  let armPathLine = null;
+  function drawArmPath() {
+    if (armPathLine) {
+      v.scene.remove(armPathLine);
+      armPathLine.geometry.dispose(); armPathLine.material.dispose();
+      armPathLine = null;
+    }
+    const pts = drawnPoses.map((w) => new v.THREE.Vector3(w.position[0], w.position[1], w.position[2]));
+    if (pts.length < 2) return;
+    const curve = new v.THREE.CatmullRomCurve3(pts);
+    const geo = new v.THREE.TubeGeometry(curve, Math.max(8, pts.length * 3), 0.004, 8, false);
+    armPathLine = new v.THREE.Mesh(geo, new v.THREE.MeshBasicMaterial({ color: 0xff7a00 }));
+    v.scene.add(armPathLine);
   }
   // PREVIEW = replay the scan in the sim: fly the arm + scanner along the path
   // around the part. The path itself is already drawn (auto, on load and on every
@@ -131,7 +164,7 @@ let ready = false;
     showH(+tH.value);
     tH.oninput = () => {
       const mm = +tH.value; showH(mm);
-      v.setMountHeight(mm); reground(); drawClientPath();   // live, no backend round-trip
+      v.setMountHeight(mm);                                 // live: moves the arm mount only
     };
     tH.onchange = async () => {
       const mm = +tH.value;
@@ -147,7 +180,7 @@ let ready = false;
   const scanBtn = $('scanArmBtn');
   if (scanBtn) scanBtn.onclick = async () => {
     if (!scanWps.length) { setStatus('no scan path to send'); return; }
-    const rpy = orientDeg();
+    const rpy = orient;
     if (!confirm(`Run the scan at orient [${rpy.map((x) => x.toFixed(0)).join(', ')}]° (aim at part ±10°)?\n` +
                  `The arm will MOVE. Ensure the cell is clear and the E-stop is in reach.`)) return;
     setStatus('sending scan to the arm…');
@@ -181,10 +214,73 @@ let ready = false;
     v.setView(b.dataset.view);
   });
 
-  reground();
+  // layer toggles (part / path / aim rays / arm / table) -- moved here from main
+  document.querySelectorAll('.toggle[data-layer]').forEach((el) => el.onclick = () => {
+    const on = !el.classList.contains('on'); el.classList.toggle('on', on); v.setLayer(el.dataset.layer, on);
+  });
+
+  // Reload the planned bundle (part + path + fit shape) after a re-plan.
+  async function reloadBundle() {
+    const b = await (await fetch('/api/viewer_bundle')).json();
+    if (b.part) v.buildPart(b.part);
+    scanWps = b.waypoints || [];
+    domeInfo = b.dome || null;
+    boxInfo = b.box || null;
+    primitive = b.primitive || (boxInfo ? 'box' : 'dome');
+    drawnPoses = [];
+    drawClientPath();           // mesh comes pre-oriented + grounded from the bundle
+    drawFit();                  // swap the fit shape to the re-fitted primitive
+    setFitActive(primitive);
+  }
+
+  // ---------------- generate path (explicit re-plan) -----------------------
+  // Regenerate the scan path for the current part on the currently-selected
+  // primitive (dome or rectangle), preserving orientation + table placement on
+  // the backend, then reload + redraw. Explicit trigger for the debug workflow.
+  const genPlanBtn = $('genPlanBtn');
+  let generating = false;
+  if (genPlanBtn) genPlanBtn.onclick = async () => {
+    if (generating) return;
+    generating = true;
+    const label = primitive === 'box' ? 'rectangle' : 'hemisphere';
+    setStatus(`generating path on ${label}…`);
+    try {
+      const r = await (await fetch('/api/plan/primitive', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ primitive }),
+      })).json();
+      if (!r.ok) { setStatus('generate failed: ' + (r.error || 'unknown')); return; }
+      await reloadBundle();
+      setStatus(`${scanWps.length} waypoints generated on ${primitive === 'box' ? 'rectangle' : 'hemisphere'}`);
+    } catch (e) { setStatus('generate error: ' + e.message); }
+    finally { generating = false; }
+  };
+
+  // ---------------- fit primitive: hemisphere <-> rectangle -> RE-PLAN -----
+  // Regenerate the path on the selected primitive (dome raster vs table-aligned
+  // box); orientation + table placement are preserved by the backend.
+  const fitSeg = $('fitSeg');
+  let refitting = false;
+  if (fitSeg) fitSeg.querySelectorAll('button').forEach((b) => b.onclick = async () => {
+    const prim = b.dataset.fit;
+    if (refitting || prim === primitive) return;
+    refitting = true;
+    setStatus(`re-planning on ${prim === 'box' ? 'rectangle' : 'hemisphere'}…`);
+    try {
+      const r = await (await fetch('/api/plan/primitive', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ primitive: prim }),
+      })).json();
+      if (!r.ok) { setStatus('re-plan failed: ' + (r.error || 'unknown')); setFitActive(primitive); return; }
+      await reloadBundle();
+      setStatus(`${scanWps.length} waypoints on ${primitive === 'box' ? 'rectangle' : 'hemisphere'}`);
+    } catch (e) { setStatus('re-plan error: ' + e.message); setFitActive(primitive); }
+    finally { refitting = false; }
+  });
+
   if (scanWps.length) drawClientPath();
-  setStatus(scanWps.length ? 'ready — flip to orient, Preview to replay, Scan → arm' : 'no scan path (plan a part first)');
-  window.__dbg = { v, orientDeg, replay };
+  setStatus(scanWps.length ? 'ready — flip to orient, Generate to plan, Preview to replay, Scan → arm' : 'no scan path (plan a part first)');
+  window.__dbg = { v, replay, orient: () => orient };
   ready = true;
 
   // Camera-follow re-aims the preview arm at the orbit look-at -- EXCEPT during a

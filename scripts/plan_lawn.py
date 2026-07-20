@@ -148,6 +148,8 @@ def main():
         # resting placement applied to the mesh before planning; export_viewer_bundle
         # re-applies it so the displayed mesh matches the path (identity if absent).
         "placement_R": [[round(float(c), 8) for c in row] for row in placement_R],
+        # placed-frame table plane (+Y up); read by scanpath_convert's clearance guard.
+        "table_up_mm": round(float(vertices[:, 1].min()), 4),
         "generated": datetime.datetime.now().isoformat(timespec="seconds"),
         "source_cad": str(args.input),
         "params": {

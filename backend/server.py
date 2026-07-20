@@ -57,7 +57,9 @@ from pathlib import Path
 # somewhere other than alongside this file.
 REPO_ROOT = Path(os.environ.get("QC_BASE_DIR") or Path(__file__).resolve().parent.parent)
 GUI_DIR = REPO_ROOT / "gui"
-CAD_DIR = REPO_ROOT / "config" / "cad"
+# Part catalogue = the CAD database folder: a part number selects a file from here.
+# Overridable via QC_PARTS_DIR; defaults to the operator's Parts library.
+CAD_DIR = Path(os.environ.get("QC_PARTS_DIR") or "/home/frank/Desktop/Parts")
 DATA_DIR = REPO_ROOT / "data"
 # Pre-generated ARM-FRAME scan path streamed by "Send to robot" when the request
 # carries no waypoints of its own. Produced offline by the CLI (plan_path.py ->
@@ -70,9 +72,10 @@ SCANPATH_FILE = DATA_DIR / "scanpath_arm.json"
 # GET /api/viewer_bundle.
 VIEWER_BUNDLE_FILE = DATA_DIR / "viewer_bundle.json"
 
-# Last part planned + the orientation it was planned at, so the viewport can
-# re-plan (re-fit the dome) when the operator reorients/moves the part.
-LAST_PLAN = {"part_id": None, "orient_deg": None}
+# Last part planned + the orientation and fit primitive it was planned at, so the
+# viewport can re-plan (re-fit the shape) when the operator reorients the part or
+# switches the fit primitive.
+LAST_PLAN = {"part_id": None, "orient_deg": None, "planner": None}
 
 
 def _load_qc_config():
@@ -238,18 +241,19 @@ class QCRequestHandler(SimpleHTTPRequestHandler):
             f.write(raw)
         self._send_json(200, {"ok": True, "file": fn})
 
-    def _handle_plan(self, part_id, orient_deg=None):
+    def _handle_plan(self, part_id, orient_deg=None, planner_key=None):
         """Regenerate the scan path + viewer bundle for a part by running the
         existing planner CLIs as subprocesses (no planner code in this backend;
         planning belongs in the PathPlanner ROS node -- this is the demo slice).
 
         orient_deg: optional [rx,ry,rz] the operator reoriented the part by -- the
-        dome planner re-fits for that pose, so rotating the part yields a new path."""
+        planner re-fits for that pose, so rotating the part yields a new path."""
         if not part_id:
             self._send_json(400, {"ok": False, "error": "partId required"})
             return
         LAST_PLAN["part_id"] = part_id           # remember for re-plan-on-reorient
         LAST_PLAN["orient_deg"] = orient_deg
+        LAST_PLAN["planner"] = planner_key
         cad = next((p for p in sorted(CAD_DIR.iterdir())
                     if p.stem == part_id and p.suffix.lower() in (".step", ".stp", ".stl", ".obj")), None)
         if cad is None:
@@ -267,16 +271,23 @@ class QCRequestHandler(SimpleHTTPRequestHandler):
         # Others: 'surround' = multi-view lawnmower (all sides, plan_surround.py);
         # 'lawn' = top-surface only; 'contour' = plane-slice rings; 'grid' = old
         # face-group raster. All emit the same ScanPath JSON.
+        # planner key: the request wins (viewport primitive toggle), else the
+        # QC_PLANNER env default. 'dome' -> hemisphere; 'box' -> minimum-volume
+        # oriented box with a per-face raster (plan_box.py).
+        key = planner_key or os.environ.get("QC_PLANNER", "dome")
         planner = {"grid": "plan_path.py", "contour": "plan_contour.py",
-                   "lawn": "plan_lawn.py", "surround": "plan_surround.py"}.get(
-            os.environ.get("QC_PLANNER", "dome"), "plan_hemisphere.py")
+                   "lawn": "plan_lawn.py", "surround": "plan_surround.py",
+                   "box": "plan_box.py"}.get(key, "plan_hemisphere.py")
         plan_cmd = [sys.executable, f"scripts/{planner}", str(cad), str(part_json)]
-        # --target-waypoints only exists on the area-scaled planners; the dome
-        # (plan_hemisphere) derives spacing from the scanner footprint instead.
-        if target_wp and target_wp != "0" and planner != "plan_hemisphere.py":
+        # --target-waypoints only exists on the area-scaled planners; the shell
+        # planners (dome hemisphere, min-volume box) derive spacing from the
+        # scanner footprint instead, so they must NOT receive it.
+        SHELL_PLANNERS = ("plan_hemisphere.py", "plan_box.py")
+        if target_wp and target_wp != "0" and planner not in SHELL_PLANNERS:
             plan_cmd += ["--target-waypoints", target_wp]
-        # operator reorientation -> re-fit the dome (hemisphere planner only)
-        if orient_deg and planner == "plan_hemisphere.py":
+        # operator reorientation -> re-fit the shell for the new pose (both shell
+        # planners accept --orient-deg).
+        if orient_deg and planner in SHELL_PLANNERS:
             plan_cmd += ["--orient-deg", ",".join(str(float(a)) for a in orient_deg[:3])]
         steps = [
             plan_cmd,
@@ -320,17 +331,35 @@ class QCRequestHandler(SimpleHTTPRequestHandler):
         # ---- (re)generate a scan path for a part (demo-slice: subprocess the
         # existing planner CLIs; no planner code runs in this stdlib backend) ----
         if route == "/api/plan":
-            self._handle_plan(payload.get("partId", ""), payload.get("orientRpyDeg"))
+            self._handle_plan(payload.get("partId", ""), payload.get("orientRpyDeg"),
+                              payload.get("planner"))
             return
 
-        # ---- re-plan the CURRENT part at a new orientation (operator reoriented/
-        # moved the part in the viewport -> regenerate the path/dome for that pose) ----
+        # ---- re-plan the CURRENT part at a new orientation (operator reoriented
+        # the part in the viewport -> regenerate the path/fit for that pose) ----
         if route == "/api/plan/reorient":
             pid = LAST_PLAN.get("part_id")
             if not pid:
                 self._send_json(400, {"ok": False, "error": "no part planned yet"})
                 return
-            self._handle_plan(pid, payload.get("orientRpyDeg"))
+            # preserve the current fit primitive across a reorient
+            self._handle_plan(pid, payload.get("orientRpyDeg"), LAST_PLAN.get("planner"))
+            return
+
+        # ---- switch the FIT PRIMITIVE (hemisphere <-> rectangle) and re-plan the
+        # current part on it, preserving orientation ----
+        if route == "/api/plan/primitive":
+            pid = LAST_PLAN.get("part_id")
+            if not pid:
+                self._send_json(400, {"ok": False, "error": "no part planned yet"})
+                return
+            prim = (payload.get("primitive") or "").lower()
+            key = {"dome": "dome", "hemisphere": "dome",
+                   "box": "box", "rectangle": "box"}.get(prim)
+            if key is None:
+                self._send_json(400, {"ok": False, "error": f"unknown primitive {prim!r}"})
+                return
+            self._handle_plan(pid, LAST_PLAN.get("orient_deg"), key)
             return
 
         # ---- robot connect / disconnect ----
@@ -456,7 +485,10 @@ class QCRequestHandler(SimpleHTTPRequestHandler):
             if not waypoints:
                 self._send_json(400, {"ok": False, "error": "no waypoints to scan"})
                 return
-            orient_deg = payload.get("orientRpyDeg") or [0, 0, 0]
+            # orient soft-bias: the request wins; else fall back to the orientation
+            # the current path was planned at (so the console, which doesn't track
+            # it, still biases the IK to match the plan).
+            orient_deg = payload.get("orientRpyDeg") or LAST_PLAN.get("orient_deg") or [0, 0, 0]
             orient_rpy = [math.radians(float(a)) for a in orient_deg[:3]]
             result = ROBOT.start_scan_trace(
                 waypoints,

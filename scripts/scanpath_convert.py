@@ -25,6 +25,7 @@ All pure Python (numpy + PyYAML), runs on the host -- no ROS2/Docker needed.
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -33,6 +34,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from libs.path_planning.frame_transform import FrameTransform, transform_scanpath  # noqa: E402
+from libs.path_planning.table_clearance import apply_table_clearance  # noqa: E402
 from libs.qc_config import load_config  # noqa: E402
 
 
@@ -51,6 +53,14 @@ def build_arg_parser():
         "--config-dir",
         default=None,
         help="config directory (default: the repo's config/)",
+    )
+    parser.add_argument(
+        "--table-clearance-mm",
+        type=float,
+        default=float(os.environ.get("QC_TABLE_CLEARANCE_MM", "0")),
+        help="if > 0, waypoints whose scanner sits within this distance of the "
+        "table are DELETED. Default 0 (disabled -- keep all waypoints); set via "
+        "QC_TABLE_CLEARANCE_MM or this flag to enable.",
     )
     return parser
 
@@ -75,6 +85,23 @@ def main():
             "sits on the arm base.",
             file=sys.stderr,
         )
+
+    # Table-collision floor (placed frame, before the arm remap): delete any
+    # waypoint whose scanner sits within the clearance of the table, so none
+    # survive inside it. Flows into both the arm path and (via
+    # export_viewer_bundle) the viewer.
+    if args.table_clearance_mm and args.table_clearance_mm > 0:
+        n_before = len(data.get("waypoints", []))
+        data, n_removed = apply_table_clearance(data, clearance_mm=args.table_clearance_mm)
+        if n_removed:
+            n_after = n_before - n_removed
+            print(f"Table-clearance floor: removed {n_removed}/{n_before} waypoint(s) "
+                  f"within {args.table_clearance_mm:.0f}mm of the table ({n_after} left)",
+                  file=sys.stderr)
+            if n_after == 0:
+                print("  WARNING: no waypoints left -- the whole scan is within the "
+                      "clearance (part shorter than it). Lower QC_TABLE_CLEARANCE_MM.",
+                      file=sys.stderr)
 
     out_data = transform_scanpath(data, transform)
 

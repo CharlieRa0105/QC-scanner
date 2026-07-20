@@ -66,6 +66,19 @@ def main():
                 "radius": round(float(sp_dome["radius_mm"]) * ft.scale, 6),
                 "up_axis": sp_dome.get("up_axis", 1)}
 
+    # Table-aligned box (box planner): recorded in the placed frame (mm) as centre
+    # + half-extents + orientation quaternion. Transform the centre like any point,
+    # rotate the orientation into the arm/table frame, and scale the half-extents
+    # (mm->m) -- the viewer draws an oriented BoxGeometry from these.
+    box = None
+    sp_box = sp.get("box")
+    if sp_box:
+        c = ft.apply_point(sp_box["center_mm"])
+        q = ft.apply_quaternion(sp_box["quaternion"])
+        box = {"center": [round(float(v), 6) for v in c],
+               "half_dims": [round(float(h) * ft.scale, 6) for h in sp_box["half_dims_mm"]],
+               "quaternion": [round(float(v), 8) for v in q]}
+
     waypoints = sp.get("waypoints", [])
 
     # Ground the whole scene on the table: the marked-corner calibration is an
@@ -86,6 +99,8 @@ def main():
                 w["target"][2] = round(w["target"][2] - z_shift, 6)
         if dome:
             dome["center"][2] = round(dome["center"][2] - z_shift, 6)
+        if box:
+            box["center"][2] = round(box["center"][2] - z_shift, 6)
 
     bundle = {
         "units": "m",
@@ -93,8 +108,10 @@ def main():
         "mount": {"base_height_m": 1.2,
                   "note": "SR5 overhead: base 1.2 m above the table, pointing down"},
         "standoff_m": sp.get("standoff_m") or round(sp.get("standoff_mm", 250) / 1000.0, 6),
+        "primitive": "box" if box else ("dome" if dome else None),
         "part": {"vertices": part_vertices, "triangles": triangles},
         "dome": dome,
+        "box": box,
         "waypoints": waypoints,
     }
     with open(args.output, "w") as f:

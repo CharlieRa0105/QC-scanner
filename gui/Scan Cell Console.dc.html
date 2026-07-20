@@ -189,10 +189,26 @@
                 <div>
                   <div style="font-size:12px;font-weight:700;letter-spacing:.04em;color:var(--color-blue-500);margin-bottom:6px">STEP 1</div>
                   <h2 class="ds" style="font-size:26px">Load the CAD model</h2>
-                  <p class="ds" style="color:var(--color-charcoal-600);margin-top:8px;font-size:15px">Load the part's CAD file. This is the reference model the scan is inspected against. (Search-by-DEX-number from the CAD database is coming.)</p>
+                  <p class="ds" style="color:var(--color-charcoal-600);margin-top:8px;font-size:15px">Find the part by its number in the CAD database, or upload a file. This is the reference model the scan is inspected against.</p>
                 </div>
+                <!-- PART-NUMBER LOOKUP (primary) -->
                 <div style="display:flex;flex-direction:column;gap:8px">
-                  <div style="font-size:12px;font-weight:600;color:var(--color-charcoal-600)">Load a CAD file</div>
+                  <div style="font-size:12px;font-weight:600;color:var(--color-charcoal-600)">Find part by number</div>
+                  <input value="{{ partQuery }}" onInput="{{ onPartSearch }}" placeholder="Type a part number…" style="height:48px;padding:0 14px;border:1px solid var(--color-charcoal-200);border-radius:6px;font-family:var(--font-mono);font-size:13px;outline:none" />
+                  <sc-if value="{{ hasPartResults }}" hint-placeholder-val="{{ true }}">
+                    <div style="display:flex;flex-direction:column;gap:4px;max-height:260px;overflow:auto">
+                      <sc-for list="{{ partResults }}" as="p" hint-placeholder-count="6">
+                        <button onClick="{{ p.pick }}" style="text-align:left;border:1px solid var(--color-charcoal-100);background:#fff;border-radius:6px;padding:9px 12px;cursor:pointer;font-family:var(--font-mono);font-size:12px;color:#000">{{ p.id }}</button>
+                      </sc-for>
+                    </div>
+                  </sc-if>
+                  <sc-if value="{{ partNoMatch }}" hint-placeholder-val="{{ false }}">
+                    <div style="font-size:12px;color:#c0392b">No part in the database matches "{{ partQuery }}".</div>
+                  </sc-if>
+                </div>
+                <!-- UPLOAD (secondary) -->
+                <div style="display:flex;flex-direction:column;gap:8px">
+                  <div style="font-size:12px;font-weight:600;color:var(--color-charcoal-600)">Or upload a file</div>
                   <label style="border:1.5px dashed var(--color-charcoal-200);border-radius:8px;padding:16px;text-align:center;cursor:pointer;color:var(--color-charcoal-500);font-size:12px">
                     <input type="file" accept=".stl,.step,.stp,.obj" onChange="{{ onFile }}" style="display:none" />
                     <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" style="display:block;margin:0 auto 6px"><use href="assets/icons.svg#upload"/></svg>
@@ -234,6 +250,7 @@
                   <div style="display:flex;justify-content:space-between;font-size:12px"><span style="color:var(--color-charcoal-500)">Coverage</span><span style="font-family:var(--font-mono);font-weight:600">{{ liveCoverage }}%</span></div>
                 </div>
                 <button onClick="{{ toggleSoft }}" style="{{ secondaryBtn }}">Pause scan (soft stop)</button>
+                <button onClick="{{ cancelScan }}" style="width:100%;height:48px;border:1px solid #c0392b;border-radius:6px;background:#fff;color:#c0392b;font-family:var(--font-sans);font-weight:700;font-size:14px;cursor:pointer">Cancel scan &amp; clear path</button>
               </div>
             </sc-if>
 
@@ -489,7 +506,7 @@ class Component extends DCLogic {
       motorsOn:false, dragMode:false, homed:false,
       eStop:false, softStop:false,
       stage:'load',
-      partId:'', matched:null,
+      partId:'', matched:null, partQuery:'',
       progress:0, passNum:1, attempts:0, result:null,
       scanRec:null, scanBusy:false,     // real scan record + in-flight flag
       clock:'',
@@ -732,26 +749,29 @@ class Component extends DCLogic {
                        `Go to [${x}, ${y}, ${z}] mm (endInRef, hold orientation) @ ${this.state.motionSpeed} mm/s`);
   };
   onPartInput=(e)=>this.setState({partId:e.target.value});
+  onPartSearch=(e)=>this.setState({partQuery:e.target.value});
   scanId=()=>{ this.setState({partId:(this.state.matched&&this.state.matched.id)||''}); };
   // Run the scan via the real backend (POST /api/scan/start). The
   // pipeline is a stub -- scanner capture + QC don't exist yet -- so it returns
   // an honest 'incomplete' record (persisted to the results store) rather than
   // a fabricated pass. We show that record on the Result step and refresh the
   // Analytics list. No fake progress animation.
-  // "Confirm & start scan" = SEND TO ROBOT: stream the planned scan path to the
-  // arm (it physically traces it), then record the scan. Gated on an operator
-  // confirm here; the backend re-checks connection + QC_ALLOW_MOTION + (on the
-  // real arm) QC_ALLOW_SCAN_TRACE. Progress drives the scanning ring; on
-  // completion the scan is recorded and we advance to Result.
+  // "Confirm & start scan" = SEND TO ROBOT: trace the planned scan path CURRENTLY
+  // IN THE VIEWPORT via the SAME oriented scan trace the Debug viewport uses
+  // (/api/robot/scan_trace: aim-at-part continuous sweep). The path is whatever was
+  // last planned (server SCANPATH_FILE, the file the viewport draws). Gated on an
+  // operator confirm here; the backend re-checks connection + QC_ALLOW_MOTION +
+  // QC_ALLOW_SCAN_TRACE. Progress drives the scanning ring; on completion the scan
+  // is recorded and we advance to Result. Cancel via cancelScan (E-stop-free abort).
   sendToRobot=async ()=>{
     if(this.state.scanBusy) return;
     if(!window.confirm('Send the scan path to the arm and start the scan?\nThe arm will MOVE. Ensure the cell is clear and the E-stop is in reach.')) return;
     this.setState({scanBusy:true, stage:'pass1', passNum:1, progress:0, scanRec:null});
     this._log('info','scan','Send to robot for '+(this.state.partId||'(no part)'));
     try{
-      const t = await (await fetch('/api/robot/follow_path',{method:'POST',
+      const t = await (await fetch('/api/robot/scan_trace',{method:'POST',
         headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({confirm:true, positionOnly:true, speedMms:this.state.motionSpeed})})).json();
+        body: JSON.stringify({confirm:true, incidenceDeg:10, speedMms:this.state.motionSpeed})})).json();
       if(!t.ok || !t.started){
         this._log('warn','arm','Send to robot refused — '+(t.error||'unknown'));
         alert('Arm did not start:\n'+(t.error||'unknown'));
@@ -781,6 +801,16 @@ class Component extends DCLogic {
         }
       }catch(e){ /* transient */ }
     }, 400);
+  };
+  // CANCEL: abort the running trace on the arm (clears the queued path) and return
+  // to the identify step. POST /api/robot/stop sets the bridge abort flag, so the
+  // trace worker stops sending waypoints; the recorded scan is NOT written.
+  cancelScan=async ()=>{
+    this._log('warn','arm','Cancel — stopping the arm and clearing the sent path');
+    clearInterval(this._scanTraceTick);
+    try{ await fetch('/api/robot/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}); }
+    catch(e){ this._log('error','arm','Stop request failed: '+e); }
+    this.setState({scanBusy:false, stage:'identify', progress:0});
   };
   _recordScan=async ()=>{
     try{
@@ -872,8 +902,8 @@ class Component extends DCLogic {
     if(this.state.traceRunning){ this._log('warn','arm','A path is already tracing'); return; }
     if(!window.confirm('Send the scan path to the arm and trace it?\nThe arm will MOVE. Ensure the cell is clear and the E-stop is in reach.')) return;
     try{
-      const r = await (await fetch('/api/robot/follow_path',{method:'POST',
-        headers:{'Content-Type':'application/json'}, body: JSON.stringify({confirm:true, positionOnly:true, speedMms:this.state.motionSpeed})})).json();
+      const r = await (await fetch('/api/robot/scan_trace',{method:'POST',
+        headers:{'Content-Type':'application/json'}, body: JSON.stringify({confirm:true, incidenceDeg:10, speedMms:this.state.motionSpeed})})).json();
       if(!r.ok || !r.started){ this._log('warn','arm','Send to robot refused — '+(r.error||'unknown')); return; }
       this._log('info','arm',`Tracing scan path — ${r.total} waypoints (source: ${r.source||'path'})`);
       this._setTrace(0, r.total, true);
@@ -1027,6 +1057,13 @@ class Component extends DCLogic {
     });
 
     const matched=s.matched||{};
+    // Part-number lookup: filter the CAD database (this.PARTS, from /api/parts ->
+    // the Parts folder) by substring; show matches to pick, or an error if none.
+    const _q=(s.partQuery||'').trim().toLowerCase();
+    const _hits=_q ? this.PARTS.filter(p=>((p.id||'')+' '+(p.short||'')+' '+(p.file||'')).toLowerCase().includes(_q)) : [];
+    const partResults=_hits.slice(0,30).map(p=>({id:p.id, short:p.short||'', pick:()=>this.chooseCad(p)}));
+    const partMatchCount=_hits.length, partOverflow=Math.max(0,_hits.length-30);
+    const partNoMatch=(_q.length>0 && _hits.length===0);
     const primaryBtn='width:100%;height:52px;border:0;border-radius:6px;background:#000;color:#fff;font-family:var(--font-sans);font-weight:700;font-size:15px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px';
     const secondaryBtn='flex:none;padding:0 20px;height:52px;border:1px solid var(--color-charcoal-200);border-radius:6px;background:#fff;color:#000;font-family:var(--font-sans);font-weight:700;font-size:14px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:8px';
     const dockBtn='display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px;border:1px solid var(--color-charcoal-200);border-radius:6px;background:#fff;color:#000;font-size:12px;font-weight:600;cursor:pointer;font-family:var(--font-sans)';
@@ -1091,8 +1128,11 @@ class Component extends DCLogic {
       chooseCad:this.chooseCad, cadReady:this.cadReady, confirmPlaced:this.confirmPlaced,
       backToLoad:this.backToLoad, backToPlace:this.backToPlace,
       onPartInput:this.onPartInput, scanId:this.scanId,
-      onFile:this.onFile, sendToRobot:this.sendToRobot,
+      onFile:this.onFile, sendToRobot:this.sendToRobot, cancelScan:this.cancelScan,
       viewInAnalytics:this.viewInAnalytics, newPart:this.newPart,
+      // part-number lookup (STEP 1)
+      partQuery:s.partQuery, onPartSearch:this.onPartSearch,
+      partResults, partNoMatch, partMatchCount, partOverflow, hasPartResults:partResults.length>0,
       // identify
       partId:s.partId,
       recentParts:this.PARTS.map(p=>({id:p.id, short:p.short, file:p.file, dims:p.dims,

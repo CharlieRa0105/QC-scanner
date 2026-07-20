@@ -41,6 +41,12 @@
   <div id="brand" class="panel"><span class="dot"></span><b>Debug viewport</b><span>· arm-base frame, mm</span></div>
 
   <div id="tools" class="panel">
+    <div class="grp-label">Fit primitive (re-plans)</div>
+    <div class="seg" id="fitSeg">
+      <button data-fit="dome" class="on">Hemisphere</button>
+      <button data-fit="box">Rectangle</button>
+    </div>
+
     <div class="grp-label">1 · Orient part (90° flips, stays grounded)</div>
     <div class="row">
       <button class="ghost" id="flipX">Flip X</button>
@@ -55,10 +61,11 @@
     </div>
 
     <label style="display: flex; align-items: center; gap: 7px; font-size: 12px; cursor: pointer;">
-      <input type="checkbox" id="showDome"> Show enclosing hemisphere
+      <input type="checkbox" id="showDome"> Show fit shape
     </label>
 
-    <div class="grp-label">2 · Preview + scan</div>
+    <div class="grp-label">2 · Generate + preview + scan</div>
+    <button class="primary" id="genPlanBtn">Generate path</button>
     <button class="ghost" id="genPathBtn">Preview (replay in sim)</button>
     <button class="primary" id="scanArmBtn">Scan →&nbsp;arm</button>
     <button class="ghost" id="commsBtn">Arm comms monitor ↗</button>
@@ -68,6 +75,13 @@
       <button data-view="orbit" class="on">Orbit</button>
       <button data-view="scanner">Scanner POV</button>
     </div>
+
+    <div class="grp-label">Layers</div>
+    <div class="toggle on" data-layer="part"><span>Part</span><span class="sw"></span></div>
+    <div class="toggle on" data-layer="path"><span>Path</span><span class="sw"></span></div>
+    <div class="toggle on" data-layer="targets"><span>Aim rays</span><span class="sw"></span></div>
+    <div class="toggle on" data-layer="arm"><span>Robot arm</span><span class="sw"></span></div>
+    <div class="toggle on" data-layer="table"><span>Table + grid</span><span class="sw"></span></div>
   </div>
 
   <div id="status" class="panel">status: <b id="statusText">loading…</b></div>
