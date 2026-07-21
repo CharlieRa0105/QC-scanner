@@ -145,9 +145,28 @@
         }, undefined, () => resolve()));
         parent = pivot;
       }
-      // tool tip frame (end of link6)
+      // tool tip frame = the SCANNER CAMERA LENS (off-centre mount): 55 mm along the
+      // flange normal (tool +Z, the look axis) and 37 mm laterally in the flange plane
+      // (tool +Y, "up"). Making the tip THIS point means the preview IK drives the
+      // CAMERA -- not the flange -- onto each waypoint and aims it at the hemisphere
+      // centre. If "up" is actually the other in-plane axis, swap CAM_UP onto x.
+      const CAM_PERP = 0.055, CAM_UP = 0.037;
       arm.tip = new THREE.Object3D();
+      arm.tip.position.set(0, CAM_UP, CAM_PERP);
       parent.add(arm.tip);
+      // draw the camera at the lens point: a body + a lens looking down tool +Z, plus
+      // a thin bracket back to the flange centre so the off-centre mount is visible.
+      const camMat = new THREE.MeshStandardMaterial({ color: 0x2b2f36, metalness: 0.3, roughness: 0.7 });
+      arm.tip.add(new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.04, 0.03), camMat));
+      const lens = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.012, 0.022, 20),
+        new THREE.MeshStandardMaterial({ color: 0x1f8a78, emissive: 0x0a2a24 }));
+      lens.rotation.x = Math.PI / 2;                 // cylinder axis -> tool +Z (look dir)
+      lens.position.z = 0.022;
+      arm.tip.add(lens);
+      arm.tip.add(new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints(
+          [new THREE.Vector3(0, -CAM_UP, -CAM_PERP), new THREE.Vector3(0, 0, 0)]),
+        new THREE.LineBasicMaterial({ color: 0x9aa0a6 })));
       arm.ready = true;
       setJoints(chain.config || [0, 0, 0, 0, 0, 0]);
     }
@@ -276,6 +295,26 @@
       placeAt(0);
     }
 
+    // Continuous ORANGE arm-travel line: one polyline through every waypoint in the
+    // order the arm visits them -- unlike the per-ring path polylines (buildPath),
+    // this INCLUDES the jumps between rings/faces, so it shows the arm's actual
+    // traversal. A thin GL line (WebGL renders line width ~1px); call AFTER buildPath.
+    let armPathLine = null;
+    function buildArmPath(wps) {
+      if (armPathLine) {
+        scene.remove(armPathLine);
+        armPathLine.geometry.dispose(); armPathLine.material.dispose();
+        armPathLine = null;
+      }
+      const src = wps || [];
+      if (src.length < 2) return;
+      const pts = src.map((w) => new THREE.Vector3(...w.position));
+      armPathLine = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints(pts),
+        new THREE.LineBasicMaterial({ color: 0xff7a00 }));
+      scene.add(armPathLine);
+    }
+
     // ---------- playback ------------------------------------------------------
     const play = { t: 0, on: false, speed: 6, poseArm: true, onStep: null, onDone: null };
     function placeAt(t) {
@@ -392,7 +431,7 @@
       THREE, scene, renderer, canvas, controls, orbitCam, scannerCam,
       cfg, mountHeight: H,
       buildArm, setJoints, solveIK, tipWorld, arm,
-      buildPart, buildPath, placeAt, play, waypoints: () => waypoints, orientPart,
+      buildPart, buildPath, buildArmPath, placeAt, play, waypoints: () => waypoints, orientPart,
       partGroup,
       setLayer, setView, frameView, tableToArmMm, armMmToTable,
       setMountHeight, mountHeightMm,

@@ -56,10 +56,10 @@ def build_arg_parser():
     p.add_argument("--window", type=int, default=2)
     p.add_argument("--mesh-size-mm", type=float, default=5.0)
     p.add_argument("--min-clearance-mm", type=float,
-                   default=float(os.environ.get("QC_BOX_CLEARANCE_MM", "150")),
+                   default=float(os.environ.get("QC_BOX_CLEARANCE_MM", "50")),
                    help="raise any waypoint whose scanner sits below this height above "
                         "the table UP to it (kept aiming at the part), so the head clears "
-                        "the table. 0 disables. Default 150 (15 cm).")
+                        "the table. 0 disables. Default 50 (5 cm).")
     p.add_argument("--orient-deg", default="0,0,0",
                    help="operator rotation 'rx,ry,rz' (deg) applied ON TOP of the resting "
                         "placement -- re-fit the box for a part the operator reoriented")

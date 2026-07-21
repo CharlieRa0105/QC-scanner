@@ -24,6 +24,7 @@ let ready = false;
   let domeInfo = null;                     // enclosing hemisphere {center,radius} (dome planner)
   let boxInfo = null;                      // enclosing rectangle {center,half_dims} (box planner)
   let primitive = 'dome';                  // which fit shape the current bundle was planned on
+  let standoffMm = 80;                     // scanner standoff (mm); slider drives it, bundle reports it
   try {
     const bundle = await (await fetch('/api/viewer_bundle')).json();
     if (bundle.part) v.buildPart(bundle.part);
@@ -31,6 +32,7 @@ let ready = false;
     domeInfo = bundle.dome || null;
     boxInfo = bundle.box || null;
     primitive = bundle.primitive || (boxInfo ? 'box' : 'dome');
+    if (bundle.standoff_m != null) standoffMm = Math.round(bundle.standoff_m * 1000);
   } catch (e) { /* no part planned yet */ }
   v.frameView();
 
@@ -115,27 +117,8 @@ let ready = false;
                      line_id: w.line_id == null ? 0 : w.line_id }))
       .filter((w) => w.position[2] >= -0.001);
     v.buildPath(drawnPoses);
-    drawArmPath();
+    v.buildArmPath(drawnPoses);   // continuous orange arm-travel line (thin GL line)
     return drawnPoses.length;
-  }
-
-  // ORANGE arm-travel line: one continuous line through every waypoint in the
-  // order the arm visits them -- unlike the per-ring path polylines, this includes
-  // the jumps BETWEEN rings/faces, so it shows the arm's actual traversal. Drawn as
-  // a thin TUBE (not a GL line) so it renders BOLD -- WebGL ignores line width.
-  let armPathLine = null;
-  function drawArmPath() {
-    if (armPathLine) {
-      v.scene.remove(armPathLine);
-      armPathLine.geometry.dispose(); armPathLine.material.dispose();
-      armPathLine = null;
-    }
-    const pts = drawnPoses.map((w) => new v.THREE.Vector3(w.position[0], w.position[1], w.position[2]));
-    if (pts.length < 2) return;
-    const curve = new v.THREE.CatmullRomCurve3(pts);
-    const geo = new v.THREE.TubeGeometry(curve, Math.max(8, pts.length * 3), 0.004, 8, false);
-    armPathLine = new v.THREE.Mesh(geo, new v.THREE.MeshBasicMaterial({ color: 0xff7a00 }));
-    v.scene.add(armPathLine);
   }
   // PREVIEW = replay the scan in the sim: fly the arm + scanner along the path
   // around the part. The path itself is already drawn (auto, on load and on every
@@ -177,17 +160,66 @@ let ready = false;
     };
   }
 
+  // ---------------- standoff (waypoint <-> fit shape distance) --------------
+  // Slider sets the scanner standoff (mm): for the hemisphere the waypoint-to-centre
+  // distance is radius + standoff; for the rectangle it's the per-face offset. On
+  // release we ask the backend to RE-PLAN at the new standoff (the planner CLI's
+  // --standoff-mm), then reload + redraw. oninput only updates the label (re-planning
+  // is a subprocess -- too heavy to run on every drag tick).
+  const sOff = $('standoff'), sOffVal = $('standoffVal');
+  function syncStandoffUI() {
+    if (!sOff) return;
+    sOff.value = String(Math.min(+sOff.max, Math.max(+sOff.min, standoffMm)));
+    if (sOffVal) sOffVal.textContent = sOff.value + ' mm';
+  }
+  if (sOff) {
+    syncStandoffUI();
+    sOff.oninput = () => { if (sOffVal) sOffVal.textContent = sOff.value + ' mm'; };
+    let standingOff = false;
+    sOff.onchange = async () => {
+      if (standingOff) return;
+      if (!scanWps.length) { setStatus('no part planned yet — standoff not applied'); return; }
+      standingOff = true;
+      const mm = +sOff.value;
+      setStatus(`re-planning at ${mm}mm standoff…`);
+      try {
+        const r = await (await fetch('/api/plan/standoff', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ standoffMm: mm }),
+        })).json();
+        if (!r.ok) { setStatus('standoff re-plan failed: ' + (r.error || 'unknown')); syncStandoffUI(); return; }
+        await reloadBundle();
+        v.frameView();
+        setStatus(`${scanWps.length} waypoints at ${standoffMm}mm standoff`);
+      } catch (e) { setStatus('standoff error: ' + e.message); syncStandoffUI(); }
+      finally { standingOff = false; }
+    };
+  }
+
+  // ---------------- scan speed (real-arm end-effector, mm/s) ----------------
+  // Sets the Cartesian sweep speed sent to 'Scan -> arm'. Local only -- read at
+  // send time, no backend call on drag; motion itself stays gated as before.
+  let scanSpeedMms = 60;
+  const spd = $('scanSpeed'), spdVal = $('scanSpeedVal');
+  if (spd) {
+    spd.value = String(scanSpeedMms);
+    const showSpd = () => { if (spdVal) spdVal.textContent = spd.value + ' mm/s'; };
+    showSpd();
+    spd.oninput = () => { scanSpeedMms = +spd.value; showSpd(); };
+  }
+
   const scanBtn = $('scanArmBtn');
   if (scanBtn) scanBtn.onclick = async () => {
     if (!scanWps.length) { setStatus('no scan path to send'); return; }
     const rpy = orient;
-    if (!confirm(`Run the scan at orient [${rpy.map((x) => x.toFixed(0)).join(', ')}]° (aim at part ±10°)?\n` +
+    if (!confirm(`Run the scan at orient [${rpy.map((x) => x.toFixed(0)).join(', ')}]° ` +
+                 `(aim at part ±10°) at ${scanSpeedMms} mm/s?\n` +
                  `The arm will MOVE. Ensure the cell is clear and the E-stop is in reach.`)) return;
-    setStatus('sending scan to the arm…');
+    setStatus(`sending scan to the arm at ${scanSpeedMms} mm/s…`);
     try {
       const r = await (await fetch('/api/robot/scan_trace', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ confirm: true, incidenceDeg: 10, orientRpyDeg: rpy, speedMms: 60 }),
+        body: JSON.stringify({ confirm: true, incidenceDeg: 10, orientRpyDeg: rpy, speedMms: scanSpeedMms }),
       })).json();
       if (!r.ok || !r.started) { setStatus('arm refused: ' + (r.error || 'unknown')); return; }
       const poll = setInterval(async () => {
@@ -227,6 +259,7 @@ let ready = false;
     domeInfo = b.dome || null;
     boxInfo = b.box || null;
     primitive = b.primitive || (boxInfo ? 'box' : 'dome');
+    if (b.standoff_m != null) { standoffMm = Math.round(b.standoff_m * 1000); syncStandoffUI(); }
     drawnPoses = [];
     drawClientPath();           // mesh comes pre-oriented + grounded from the bundle
     drawFit();                  // swap the fit shape to the re-fitted primitive

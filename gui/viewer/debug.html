@@ -59,6 +59,11 @@
       <input type="range" id="tableH" min="400" max="1400" step="10" style="flex: 1;">
       <span id="tableHVal" style="font-family: var(--font-mono); font-size: 11px; min-width: 54px; text-align: right; color: var(--ink-dim);"></span>
     </div>
+    <div class="grp-label">Standoff (waypoint → fit shape, mm)</div>
+    <div class="row" style="align-items: center;">
+      <input type="range" id="standoff" min="20" max="400" step="5" style="flex: 1;">
+      <span id="standoffVal" style="font-family: var(--font-mono); font-size: 11px; min-width: 54px; text-align: right; color: var(--ink-dim);"></span>
+    </div>
 
     <label style="display: flex; align-items: center; gap: 7px; font-size: 12px; cursor: pointer;">
       <input type="checkbox" id="showDome"> Show fit shape
@@ -67,6 +72,11 @@
     <div class="grp-label">2 · Generate + preview + scan</div>
     <button class="primary" id="genPlanBtn">Generate path</button>
     <button class="ghost" id="genPathBtn">Preview (replay in sim)</button>
+    <div class="grp-label">Scan speed (arm end-effector, mm/s)</div>
+    <div class="row" style="align-items: center;">
+      <input type="range" id="scanSpeed" min="10" max="200" step="5" style="flex: 1;">
+      <span id="scanSpeedVal" style="font-family: var(--font-mono); font-size: 11px; min-width: 54px; text-align: right; color: var(--ink-dim);"></span>
+    </div>
     <button class="primary" id="scanArmBtn">Scan →&nbsp;arm</button>
     <button class="ghost" id="commsBtn">Arm comms monitor ↗</button>
 

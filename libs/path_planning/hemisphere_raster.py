@@ -71,6 +71,7 @@ def generate_hemisphere_waypoints(
     line_spacing_mm,
     along_track_mm,
     up_axis=1,
+    skip_top_rings=0,
     log=print,
 ):
     """
@@ -82,6 +83,8 @@ def generate_hemisphere_waypoints(
         line_spacing_mm: arc gap between elevation rings.
         along_track_mm: arc gap between points along a ring.
         up_axis: which axis is up (default 1 = +Y, the pipeline convention).
+        skip_top_rings: drop the first N elevation rings (nearest the dome apex),
+            i.e. the near-overhead poses on the arm's singular column. Default 0.
         log: progress sink.
 
     Returns:
@@ -115,6 +118,8 @@ def generate_hemisphere_waypoints(
     n_theta = max(1, int(round((math.pi / 2) / d_theta)))
     for it in range(n_theta + 1):
         theta = (math.pi / 2) * it / n_theta
+        if it < skip_top_rings:              # drop the top N rings (nearest the apex)
+            continue
         ring_radius = r_scan * math.sin(theta)
         if ring_radius < 1e-6:               # pole -> a single point straight up
             pos = centre + r_scan * UP

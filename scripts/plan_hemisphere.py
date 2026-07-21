@@ -17,6 +17,7 @@ import argparse
 import datetime
 import json
 import math
+import os
 import sys
 from pathlib import Path
 
@@ -52,6 +53,16 @@ def build_arg_parser():
                         "the part centroid (the head always points at the part)")
     p.add_argument("--window", type=int, default=2)
     p.add_argument("--mesh-size-mm", type=float, default=5.0)
+    p.add_argument("--skip-top-rings", type=int,
+                   default=int(os.environ.get("QC_HEMI_SKIP_TOP_RINGS", "2")),
+                   help="drop the top N elevation rings (nearest the dome apex) from the "
+                        "path -- the near-overhead poses on the arm's singular column that "
+                        "it can't reach. Default 2.")
+    p.add_argument("--min-clearance-mm", type=float,
+                   default=float(os.environ.get("QC_DOME_CLEARANCE_MM", "50")),
+                   help="raise any waypoint whose scanner sits below this height above "
+                        "the table UP to it (kept aiming at the part), so the head clears "
+                        "the table. 0 disables. Default 50 (5 cm).")
     p.add_argument("--orient-deg", default="0,0,0",
                    help="operator rotation 'rx,ry,rz' (deg) applied ON TOP of the resting "
                         "placement -- re-plan the dome for a part the operator reoriented")
@@ -86,6 +97,7 @@ def main():
         line_spacing_mm=spacing,
         along_track_mm=args.along_track_mm,
         up_axis=1,
+        skip_top_rings=args.skip_top_rings,
     )
     n_lines = 1 + max((wp.line_id for wp in waypoints), default=-1)
 
@@ -106,6 +118,31 @@ def main():
             "line_id": int(wp.line_id),
             "incidence_angle_deg": round(float(result["incidence_angle_deg"]), 3),
         })
+
+    # Table clearance: raise any waypoint whose scanner sits below the clearance up
+    # to it, then re-aim from the lifted position at the SAME target (the dome centre)
+    # -- so the head clears the table while still scanning the part. Placed frame is
+    # +Y up, table = the part's lowest Y; the dome's lowest ring sits near/below the
+    # table, which this lifts. Mirrors the table-clearance block in plan_box.py.
+    if args.min_clearance_mm and args.min_clearance_mm > 0:
+        floor = float(vertices[:, 1].min()) + args.min_clearance_mm
+        n_lifted = 0
+        for w in out_waypoints:
+            if w["position"][1] >= floor:
+                continue
+            w["position"][1] = round(floor, 4)
+            pos = np.asarray(w["position"], dtype=float)
+            look = np.asarray(w["target"], dtype=float) - pos
+            nz = float(np.linalg.norm(look))
+            if nz > 1e-9:
+                z = look / nz
+                ref = np.array([1.0, 0.0, 0.0]) if abs(z[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
+                x = np.cross(ref, z); x /= np.linalg.norm(x)
+                y = np.cross(z, x)
+                w["quaternion"] = list(rotation_matrix_to_quaternion(x, y, z))
+            n_lifted += 1
+        print(f"Table clearance: raised {n_lifted}/{len(out_waypoints)} waypoint(s) to "
+              f"{args.min_clearance_mm:.0f}mm above the table")
 
     out_data = {
         "generator": "plan_hemisphere.py (enclosing-hemisphere dome raster + incidence-cone relaxation)",

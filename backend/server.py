@@ -75,7 +75,7 @@ VIEWER_BUNDLE_FILE = DATA_DIR / "viewer_bundle.json"
 # Last part planned + the orientation and fit primitive it was planned at, so the
 # viewport can re-plan (re-fit the shape) when the operator reorients the part or
 # switches the fit primitive.
-LAST_PLAN = {"part_id": None, "orient_deg": None, "planner": None}
+LAST_PLAN = {"part_id": None, "orient_deg": None, "planner": None, "standoff_mm": None}
 
 
 def _load_qc_config():
@@ -241,19 +241,23 @@ class QCRequestHandler(SimpleHTTPRequestHandler):
             f.write(raw)
         self._send_json(200, {"ok": True, "file": fn})
 
-    def _handle_plan(self, part_id, orient_deg=None, planner_key=None):
+    def _handle_plan(self, part_id, orient_deg=None, planner_key=None, standoff_mm=None):
         """Regenerate the scan path + viewer bundle for a part by running the
         existing planner CLIs as subprocesses (no planner code in this backend;
         planning belongs in the PathPlanner ROS node -- this is the demo slice).
 
         orient_deg: optional [rx,ry,rz] the operator reoriented the part by -- the
-        planner re-fits for that pose, so rotating the part yields a new path."""
+        planner re-fits for that pose, so rotating the part yields a new path.
+        standoff_mm: optional scanner standoff (mm) for the shell planners -- for the
+        hemisphere it sets the waypoint-to-centre distance (radius + standoff), for
+        the box the per-face offset. None = the planner's own default (80mm)."""
         if not part_id:
             self._send_json(400, {"ok": False, "error": "partId required"})
             return
         LAST_PLAN["part_id"] = part_id           # remember for re-plan-on-reorient
         LAST_PLAN["orient_deg"] = orient_deg
         LAST_PLAN["planner"] = planner_key
+        LAST_PLAN["standoff_mm"] = standoff_mm
         cad = next((p for p in sorted(CAD_DIR.iterdir())
                     if p.stem == part_id and p.suffix.lower() in (".step", ".stp", ".stl", ".obj")), None)
         if cad is None:
@@ -289,6 +293,10 @@ class QCRequestHandler(SimpleHTTPRequestHandler):
         # planners accept --orient-deg).
         if orient_deg and planner in SHELL_PLANNERS:
             plan_cmd += ["--orient-deg", ",".join(str(float(a)) for a in orient_deg[:3])]
+        # operator standoff (debug slider) -> waypoint distance from the fit shape;
+        # only the shell planners expose --standoff-mm.
+        if standoff_mm is not None and planner in SHELL_PLANNERS:
+            plan_cmd += ["--standoff-mm", str(float(standoff_mm))]
         steps = [
             plan_cmd,
             [sys.executable, "scripts/scanpath_convert.py", str(part_json), str(SCANPATH_FILE)],
@@ -332,7 +340,7 @@ class QCRequestHandler(SimpleHTTPRequestHandler):
         # existing planner CLIs; no planner code runs in this stdlib backend) ----
         if route == "/api/plan":
             self._handle_plan(payload.get("partId", ""), payload.get("orientRpyDeg"),
-                              payload.get("planner"))
+                              payload.get("planner"), payload.get("standoffMm"))
             return
 
         # ---- re-plan the CURRENT part at a new orientation (operator reoriented
@@ -342,8 +350,9 @@ class QCRequestHandler(SimpleHTTPRequestHandler):
             if not pid:
                 self._send_json(400, {"ok": False, "error": "no part planned yet"})
                 return
-            # preserve the current fit primitive across a reorient
-            self._handle_plan(pid, payload.get("orientRpyDeg"), LAST_PLAN.get("planner"))
+            # preserve the current fit primitive + standoff across a reorient
+            self._handle_plan(pid, payload.get("orientRpyDeg"), LAST_PLAN.get("planner"),
+                              LAST_PLAN.get("standoff_mm"))
             return
 
         # ---- switch the FIT PRIMITIVE (hemisphere <-> rectangle) and re-plan the
@@ -359,7 +368,26 @@ class QCRequestHandler(SimpleHTTPRequestHandler):
             if key is None:
                 self._send_json(400, {"ok": False, "error": f"unknown primitive {prim!r}"})
                 return
-            self._handle_plan(pid, LAST_PLAN.get("orient_deg"), key)
+            self._handle_plan(pid, LAST_PLAN.get("orient_deg"), key,
+                              LAST_PLAN.get("standoff_mm"))
+            return
+
+        # ---- adjust the scanner STANDOFF (debug slider: waypoint distance from the
+        # fit shape) and re-plan the current part on it, preserving orient + primitive ----
+        if route == "/api/plan/standoff":
+            pid = LAST_PLAN.get("part_id")
+            if not pid:
+                self._send_json(400, {"ok": False, "error": "no part planned yet"})
+                return
+            try:
+                standoff = float(payload.get("standoffMm"))
+            except (TypeError, ValueError):
+                self._send_json(400, {"ok": False, "error": "standoffMm (number) required"})
+                return
+            if not (0 < standoff <= 1000):
+                self._send_json(400, {"ok": False, "error": "standoffMm out of range (0, 1000]"})
+                return
+            self._handle_plan(pid, LAST_PLAN.get("orient_deg"), LAST_PLAN.get("planner"), standoff)
             return
 
         # ---- robot connect / disconnect ----

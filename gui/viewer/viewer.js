@@ -38,10 +38,12 @@ const setStatus = (t) => { $('statusText').textContent = t; };
   }
   function drawPath() {
     // path is in the fixed table frame (bundle is grounded); draw as-is.
-    v.buildPath(scanWps
+    const poses = scanWps
       .map((w) => ({ position: w.position, target: (w.target || w.position),
                      line_id: w.line_id == null ? 0 : w.line_id }))
-      .filter((w) => w.position[2] >= -0.001));
+      .filter((w) => w.position[2] >= -0.001);
+    v.buildPath(poses);
+    v.buildArmPath(poses);   // continuous orange arm-travel line (thin GL line)
   }
   function buildDome() {
     if (domeMesh) { v.scene.remove(domeMesh); domeMesh = null; }

@@ -100,6 +100,21 @@ ALLOW_SCAN_TRACE = os.environ.get("QC_ALLOW_SCAN_TRACE", "0").lower() not in ("0
 # blended sweep can't do these orientations. Set QC_SCAN_LOOK_INWARD=0 to aim +Z
 # outward instead (scanner would look -Z; only useful if the sensor is remounted).
 SCAN_LOOK_INWARD = os.environ.get("QC_SCAN_LOOK_INWARD", "1").lower() not in ("0", "false", "no", "")
+# Off-centre scanner camera: the lens position relative to the flange, in the TOOL
+# frame (x, y, z) metres -- 55 mm along tool +Z (the look axis, perpendicular to the
+# flange face) and 37 mm laterally (tool +Y, "up"). Commanding the flange to
+# (camera_target - R @ offset) puts the CAMERA LENS on each waypoint aiming at the
+# part centre, not the flange. Mirrors viewer3d.js CAM_PERP/CAM_UP; roll is fixed by
+# _look_along_z(up_ref=+Z). QC_CAM_OFFSET_TOOL_M overrides "x,y,z"; "0,0,0" restores
+# flange-as-TCP (the original behaviour).
+CAM_OFFSET_TOOL_M = [float(v) for v in
+                     os.environ.get("QC_CAM_OFFSET_TOOL_M", "0.0,0.037,0.055").split(",")]
+# _wait_settle also treats the arm as settled once its joints stop changing (within
+# SETTLE_TOL_RAD) for SETTLE_STABLE_S -- guards against the controller leaving
+# operationState='moving' after the arm has PHYSICALLY stopped, which otherwise froze
+# the scan for minutes between lines. QC_SETTLE_STABLE_S / QC_SETTLE_TOL_DEG override.
+SETTLE_STABLE_S = float(os.environ.get("QC_SETTLE_STABLE_S", "2.0"))
+SETTLE_TOL_RAD = math.radians(float(os.environ.get("QC_SETTLE_TOL_DEG", "0.1")))
 # TEST-ONLY mock backend (QC_ARM_MOCK=1): used to self-verify motion flows
 # without hardware (the refactor rule: prove against the mock first). Default
 # OFF -- a normal session always talks to the real SR5 and never fakes a
@@ -942,8 +957,13 @@ class RobotBridge:
                     d = [pos[i] - tgt[i] for i in range(3)]
                 if sum(c * c for c in d) < 1e-12:
                     d = [0.0, 0.0, 1.0]
-                aim_rpy = _R_to_rpy(_look_along_z(_vnorm(self._dir_table_to_er(d))))
-                p_er = self._endinref_point(pos)
+                R_er = _look_along_z(_vnorm(self._dir_table_to_er(d)))
+                aim_rpy = _R_to_rpy(R_er)
+                # flange so the off-centre camera lens lands on the waypoint & aims at
+                # the part centre: flange = camera_target - R @ tool-frame offset.
+                off_er = _mv3(R_er, CAM_OFFSET_TOOL_M)
+                cam_er = self._endinref_point(pos)
+                p_er = [cam_er[k] - off_er[k] for k in range(3)]
                 reachable = self._cone_reachable(p_er, aim_rpy, incidence_deg) is not None
                 nreach += 1 if reachable else 0
                 out.append({"position": pos, "target": tgt,
@@ -988,6 +1008,14 @@ class RobotBridge:
                                 "total": rep.get("total", len(waypoints)),
                                 "aborted": rep.get("aborted", False),
                                 "error": rep.get("error"), "ok": rep.get("ok", False)}
+            # terminal notice that the scan finished (success / abort / failure).
+            done, tot = rep.get("completed", 0), rep.get("total", len(waypoints))
+            if rep.get("ok"):
+                self._blog(f"[bridge] SCAN DONE: {done}/{tot} waypoints completed")
+            elif rep.get("aborted"):
+                self._blog(f"[bridge] SCAN ABORTED at {done}/{tot} waypoints")
+            else:
+                self._blog(f"[bridge] SCAN FAILED at {done}/{tot} waypoints: {rep.get('error')}")
 
         self._follow_thread = threading.Thread(target=_run, daemon=True)
         self._follow_thread.start()
@@ -1040,8 +1068,13 @@ class RobotBridge:
                     d = [pos[i] - tgt[i] for i in range(3)]    # +Z away; scanner -Z at the part
                 if sum(c * c for c in d) < 1e-12:
                     d = [0.0, 0.0, 1.0]
-                aim_rpy = _R_to_rpy(_look_along_z(_vnorm(self._dir_table_to_er(d))))
-                built.append((self._endinref_point(pos), aim_rpy, wp.get("line_id", 0)))
+                R_er = _look_along_z(_vnorm(self._dir_table_to_er(d)))
+                aim_rpy = _R_to_rpy(R_er)
+                # flange so the off-centre camera lens lands on the waypoint & aims at
+                # the part centre (see CAM_OFFSET_TOOL_M).
+                off_er = _mv3(R_er, CAM_OFFSET_TOOL_M)
+                cam_er = self._endinref_point(pos)
+                built.append(([cam_er[k] - off_er[k] for k in range(3)], aim_rpy, wp.get("line_id", 0)))
         if not built:
             return _report(False, 0, error="no scan poses (empty part path)")
         total = len(built)                 # progress denominator = planned waypoints
@@ -1108,9 +1141,14 @@ class RobotBridge:
                     if arm is None:
                         return _report(False, completed, error="connection lost")
                     swept = arm.move_pose_list(poses, speed, linear=False)
-                if swept and not self._wait_settle(reach_timeout_s):
+                # Size the settle-timeout to the sweep itself: a full dome ring at a low
+                # scan speed takes far longer than the fixed reposition timeout, so a flat
+                # timeout wrongly reports 'did not complete' while the arm is still moving.
+                sweep_timeout = self._sweep_timeout_s(poses, speed, reach_timeout_s)
+                if swept and not self._wait_settle(sweep_timeout):
                     return _report(False, completed, aborted=self._abort.is_set(),
-                                   error=f"line {lid}: sweep did not complete")
+                                   error=f"line {lid}: sweep did not complete "
+                                         f"(waited {sweep_timeout:.0f}s)")
 
             # Fallback: if the blended sweep would not start, trace the ring
             # point-to-point so the scan still completes (just not as smooth).
@@ -1135,12 +1173,36 @@ class RobotBridge:
 
         return _report(True, completed)
 
+    def _sweep_timeout_s(self, poses, speed_mms, floor_s, margin_s=30.0, slack=1.5):
+        """Settle-timeout sized to how long a blended sweep through `poses` takes:
+        (path length (endInRef, metres) / speed) * slack + margin, never below floor_s.
+        `slack` covers accel/decel + turning zones (a blended MoveJ runs slower than the
+        straight path/speed estimate). Without this, a long slow ring is wrongly declared
+        'did not complete' at the fixed reposition timeout while the arm is still sweeping."""
+        try:
+            length_mm = 0.0
+            for a, b in zip(poses, poses[1:]):
+                pa, pb = a[0], b[0]
+                length_mm += 1000.0 * math.sqrt(sum((pb[k] - pa[k]) ** 2 for k in range(3)))
+            if speed_mms and float(speed_mms) > 0:
+                return max(float(floor_s), slack * length_mm / float(speed_mms) + margin_s)
+        except Exception:  # noqa: BLE001
+            pass
+        return float(floor_s)
+
     def _wait_settle(self, timeout_s, tick_s=0.1):
         """Wait until the arm stops moving (or abort/timeout). Returns True if it
-        settled cleanly, False on abort / error / timeout."""
+        settled cleanly, False on abort / error / timeout.
+
+        Settled = EITHER the driver reports not-moving, OR the joints hold still
+        (within SETTLE_TOL_RAD) for SETTLE_STABLE_S. The joint-stability path stops
+        the scan freezing between lines when the controller keeps operationState=
+        'moving' long after the arm has physically stopped -- we advance as soon as
+        the arm is actually stationary, never while it's still moving."""
         time.sleep(tick_s)   # grace so the controller flips into 'moving' first
         deadline = time.time() + timeout_s
         last = time.time()
+        prev_j, stable_since = None, None
         while time.time() < deadline:
             if self._abort.is_set():
                 with self._lock:
@@ -1155,10 +1217,25 @@ class RobotBridge:
                     return False
                 arm.update(dt)
                 moving, st = arm.is_moving(), arm.get_status()
+                joints = arm.get_joints()
             if isinstance(st, str) and st.startswith("error"):
                 return False
             if not moving:
                 return True
+            # joint-stability fallback: joints unchanged within tol -> physically
+            # stopped, even if operationState is still 'moving'. Advance after the
+            # arm has held still for SETTLE_STABLE_S so we don't skip a slow sweep.
+            if (prev_j is not None and joints and len(joints) == len(prev_j)
+                    and all(abs(a - b) <= SETTLE_TOL_RAD for a, b in zip(joints, prev_j))):
+                if stable_since is None:
+                    stable_since = now
+                elif now - stable_since >= SETTLE_STABLE_S:
+                    self._blog(f"[bridge] settled via joint-stability after {SETTLE_STABLE_S:.1f}s "
+                               f"(operationState still '{st}')")
+                    return True
+            else:
+                stable_since = None
+            prev_j = joints
             time.sleep(tick_s)
         return False
 
