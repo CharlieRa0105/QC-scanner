@@ -81,26 +81,37 @@ def main():
 
     waypoints = sp.get("waypoints", [])
 
-    # Ground the whole scene on the table: the marked-corner calibration is an
-    # identity placeholder, so ft leaves the part sitting at an arbitrary Z. Shift
-    # everything (mesh, waypoints, dome) so the part's lowest point is exactly z=0.
+    # Ground + centre the whole scene on the table: the marked-corner calibration
+    # is an identity placeholder, so ft leaves the part at an arbitrary Z and an
+    # arbitrary X,Y (wherever the CAD's own origin falls). Shift everything (mesh,
+    # waypoints, dome, box) by ONE vector so the part's footprint is CENTRED under
+    # the arm base (X,Y = table origin) and its lowest point sits exactly at z=0.
     # This is a VIEWER-only shift (scanpath_arm, which the arm runs, is untouched),
     # and it lets the viewer draw the path/dome in a FIXED table frame that already
-    # sits on the table -- no per-frame regrounding, so a part flip can rotate only
-    # the part without dragging the path around.
-    z_shift = min((v[2] for v in part_vertices), default=0.0)
-    if z_shift:
+    # sits centred on the table -- no per-frame regrounding, so a part flip can
+    # rotate only the part without dragging the path around.
+    # Replace the X,Y terms with the measured corner offset once corner_transform
+    # is calibrated (decision 5) and the part should sit at the marked corner.
+    xs = [v[0] for v in part_vertices]
+    ys = [v[1] for v in part_vertices]
+    shift = [
+        (min(xs) + max(xs)) / 2 if xs else 0.0,   # X: footprint centre -> 0
+        (min(ys) + max(ys)) / 2 if ys else 0.0,   # Y: footprint centre -> 0
+        min((v[2] for v in part_vertices), default=0.0),  # Z: lowest point -> 0 (ground)
+    ]
+    if any(shift):
         for v in part_vertices:
-            v[2] = round(v[2] - z_shift, 6)
+            for k in range(3):
+                v[k] = round(v[k] - shift[k], 6)
         for w in waypoints:
-            if "position" in w:
-                w["position"][2] = round(w["position"][2] - z_shift, 6)
-            if "target" in w:
-                w["target"][2] = round(w["target"][2] - z_shift, 6)
+            for key in ("position", "target"):
+                if key in w:
+                    for k in range(3):
+                        w[key][k] = round(w[key][k] - shift[k], 6)
         if dome:
-            dome["center"][2] = round(dome["center"][2] - z_shift, 6)
+            dome["center"] = [round(dome["center"][k] - shift[k], 6) for k in range(3)]
         if box:
-            box["center"][2] = round(box["center"][2] - z_shift, 6)
+            box["center"] = [round(box["center"][k] - shift[k], 6) for k in range(3)]
 
     bundle = {
         "units": "m",
