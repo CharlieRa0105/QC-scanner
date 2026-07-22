@@ -89,6 +89,29 @@ job tmp dir (not committed); the kept ROS checks are
 
 ---
 
+## 2026-07-22 — Cell geometry + motion safety (full log: `docs/session-logs/2026-07-22.md`)
+
+- **Table height** set to **1000 mm** below the arm base (`config/local_config.yaml`
+  `workspace` override). Reach check: parts on the table are below the scanning
+  sweet-spot (~300–700 mm up) → need a raised fixture (design decision, open).
+- **Sim part centred** on the table: `export_viewer_bundle.py` now shifts X,Y (not
+  just Z) so the footprint sits under the base; mesh + path + dome/box move together.
+- **Home pose** defined in **joint space** — `HOME_JOINTS_DEG =
+  [-71.38, 93.33, 127.11, 157.33, -61.23, -77.06]` (TCP −88.1, 21.4, −553.5 mm /
+  87.2, −0.7, 1.2 deg). New `go_home()` (MoveJ + settle) runs at **scan start and
+  end** (skipped after abort/E-stop). **Home button** fixed — was hardcoded to
+  all-zeros; now `POST /api/robot/home` → same `HOME_JOINTS_DEG`.
+- **Hardcoded J2 rail guard**: `move_joints` refuses any J2 target outside
+  **[−120°, 115°]** (arm was swinging J2 into its mounting rail); UI J2 max 120→115.
+  Guards joint-space commands only — Cartesian scans still route J2 via the controller.
+- **Jog-to-targets fixed**: replaced the fragile 4 s hold timer with a per-joint
+  `edited` hold so typed targets aren't clobbered by telemetry before Jog.
+- **Decision:** move IK off the controller into **ROS 2 + MoveIt** (own IK) so every
+  arm command is joint angles → rail-avoidance on the whole path + accurate sim.
+  Scaffolding already exists (`qc_moveit_config`, `moveit_planner.py`, `sr5_arm_driver`).
+
+---
+
 ## 2026-07-15 — Refactor Part 1 (demo slice) + console fixes
 
 Working through `REFACTOR_INSTRUCTIONS.md`, one task per checkpoint. **Nothing
