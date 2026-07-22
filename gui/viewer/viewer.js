@@ -217,6 +217,30 @@ const setStatus = (t) => { $('statusText').textContent = t; };
   // ---- content --------------------------------------------------------------
   setStatus('loading…');
   await v.buildArm('assets/arm/');
+
+  // ---- MoveIt trajectory preview over rosbridge (Phase 3) --------------------
+  // If the ROS graph is up (qc_bringup → rosbridge on :9090), animate the arm
+  // through the EXACT joints MoveIt planned (accurate sim). Silently retries if
+  // rosbridge isn't reachable, so the viewer still works off the HTTP API alone.
+  // NOTE: while a trajectory previews, the live HTTP joint-sync (syncArm) also
+  // writes joints — for a clean preview, use one source at a time (tune later).
+  if (window.QCRos) {
+    const rosUrl = 'ws://' + (location.hostname || '127.0.0.1') + ':9090';
+    QCRos.connect(rosUrl, {
+      subscribe: [
+        { topic: '/plan/trajectory', type: 'trajectory_msgs/JointTrajectory' },
+        { topic: '/mission/state', type: 'qc_msgs/MissionState' },
+      ],
+      onMsg: (topic, msg) => {
+        if (topic === '/plan/trajectory' && msg.points && msg.points.length) {
+          v.playJointTrajectory(msg.points, { loop: true });
+          setStatus('MoveIt preview — ' + msg.points.length + ' trajectory points');
+        } else if (topic === '/mission/state') {
+          setStatus('mission: ' + msg.phase + (msg.detail ? ' — ' + msg.detail : ''));
+        }
+      },
+    });
+  }
   try {
     const bundle = await loadBundle();
     v.frameView();

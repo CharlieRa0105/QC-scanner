@@ -317,6 +317,24 @@
 
     // ---------- playback ------------------------------------------------------
     const play = { t: 0, on: false, speed: 6, poseArm: true, onStep: null, onDone: null };
+
+    // ---------- MoveIt joint-trajectory preview (rosbridge) -------------------
+    // Animate the arm through a MoveIt-planned JointTrajectory: the SAME joint
+    // angles the real arm will run (IK done by MoveIt, not the controller). This
+    // is the "accurate sim" — no per-frame IK, we just replay the planned joints.
+    // Points: [{positions:[rad...], time_from_start:{sec,nanosec}}].
+    let jtraj = null;
+    function playJointTrajectory(points, opts) {
+      if (!points || !points.length || !arm.ready) return;
+      const secs = points.map((p) => (p.time_from_start
+        ? p.time_from_start.sec + (p.time_from_start.nanosec || 0) * 1e-9 : 0));
+      // Synthesize uniform timing if MoveIt didn't stamp times (all zero).
+      const dur = secs[secs.length - 1];
+      const times = dur > 0 ? secs : points.map((_, i) => i * ((opts && opts.step) || 0.4));
+      jtraj = { pts: points.map((p) => p.positions), times, t: 0, loop: !!(opts && opts.loop) };
+      play.on = false;   // joint replay takes over from the waypoint player
+    }
+    function stopJointTrajectory() { jtraj = null; }
     function placeAt(t) {
       if (!waypoints.length) return;
       const n = waypoints.length;
@@ -402,7 +420,20 @@
         if (opts.sizeToWindow) renderer.setSize(W, Hh);
         [orbitCam, scannerCam].forEach((c) => { c.aspect = W / Hh; c.updateProjectionMatrix(); });
       }
-      if (play.on && waypoints.length > 1) {
+      if (jtraj) {
+        // Replay the MoveIt joint trajectory: advance time, find the bracketing
+        // points, lerp joint angles, pose the arm directly (no IK).
+        jtraj.t += dt;
+        const T = jtraj.times, end = T[T.length - 1];
+        let tt = jtraj.t, done = false;
+        if (tt >= end) { if (jtraj.loop) { jtraj.t = tt = 0; } else { tt = end; done = true; } }
+        let i = 0; while (i < T.length - 1 && T[i + 1] < tt) i++;
+        const j = Math.min(T.length - 1, i + 1);
+        const span = (T[j] - T[i]) || 1, f = Math.max(0, Math.min(1, (tt - T[i]) / span));
+        const a = jtraj.pts[i] || [], b = jtraj.pts[j] || a;
+        if (a.length) setJoints(a.map((v, k) => v + (b[k] - v) * f));
+        if (done) jtraj = null;
+      } else if (play.on && waypoints.length > 1) {
         let t = play.t + play.speed * dt;
         if (t >= waypoints.length - 1) { t = waypoints.length - 1; play.on = false; play.onDone && play.onDone(); }
         placeAt(t);
@@ -432,6 +463,7 @@
       cfg, mountHeight: H,
       buildArm, setJoints, solveIK, tipWorld, arm,
       buildPart, buildPath, buildArmPath, placeAt, play, waypoints: () => waypoints, orientPart,
+      playJointTrajectory, stopJointTrajectory,
       partGroup,
       setLayer, setView, frameView, tableToArmMm, armMmToTable,
       setMountHeight, mountHeightMm,
