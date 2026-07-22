@@ -28,6 +28,7 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64MultiArray, String
+from std_srvs.srv import SetBool
 
 _DEFAULT_SPEED_MMS = 30.0   # conservative end-effector speed for playback
 _REACH_TOL_RAD = 0.02       # per-joint "reached" tolerance
@@ -40,6 +41,9 @@ class MovementDriverNode(Node):
         self._cbg = ReentrantCallbackGroup()
         self._cmd_pub = self.create_publisher(Float64MultiArray, "/arm/command", 10)
         self._state_pub = self.create_publisher(String, "/movement/state", 10)
+        # The arm won't move while its motors are off, so ensure power before a
+        # trajectory. (Execution-only still: this energises, it does not plan.)
+        self._power_cli = self.create_client(SetBool, "/arm/set_power", callback_group=self._cbg)
         self._joints = None
         self.create_subscription(
             JointState, "/arm/joint_states", self._on_joints, 10, callback_group=self._cbg
@@ -71,6 +75,19 @@ class MovementDriverNode(Node):
             time.sleep(0.02)
         return False
 
+    def _ensure_powered(self, timeout=5.0):
+        """Best-effort: energise the arm motors before playback -- a mock or real
+        arm rejects moves while powered off. Returns True if power is (now) on."""
+        if not self._power_cli.wait_for_service(timeout_sec=timeout):
+            self.get_logger().warn("/arm/set_power unavailable — assuming already powered")
+            return True
+        fut = self._power_cli.call_async(SetBool.Request(data=True))
+        deadline = time.time() + timeout
+        while not fut.done() and time.time() < deadline:
+            time.sleep(0.02)
+        r = fut.result()
+        return bool(r and r.success)
+
     def _execute(self, goal_handle):
         result = ExecutePath.Result()
         points = goal_handle.request.trajectory.joint_trajectory.points
@@ -78,6 +95,12 @@ class MovementDriverNode(Node):
         if total == 0:
             self._set_state("error")
             result.success, result.message = False, "empty trajectory (nothing to execute)"
+            goal_handle.abort()
+            return result
+
+        if not self._ensure_powered():
+            self._set_state("error")
+            result.success, result.message = False, "could not power on the arm"
             goal_handle.abort()
             return result
 

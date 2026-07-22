@@ -54,7 +54,11 @@ def load_cad(filepath, mesh_size=None):
     if not os.path.isfile(filepath):
         raise FileNotFoundError(f"CAD file not found: {filepath}")
 
-    gmsh.initialize()
+    # interruptible=False: skip gmsh's SIGINT handler install. gmsh.initialize()
+    # otherwise calls signal.signal(), which raises "signal only works in main
+    # thread" when load_cad runs off the main thread (e.g. inside PathPlanner's
+    # ROS action-callback thread). We don't need gmsh's Ctrl-C handling here.
+    gmsh.initialize(interruptible=False)
     try:
         # Silence gmsh's own stdout logging -- otherwise every call
         # spams the terminal with meshing progress lines.
