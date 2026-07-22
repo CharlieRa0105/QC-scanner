@@ -19,6 +19,13 @@ planner:
   face_angle_tol_deg: 30    # normal-clustering tolerance for face grouping (waypoint_generator)
   samples: 20000            # surface sample count (density of the source point cloud)
   mesh_size_mm: 5           # STEP tessellation target edge length
+  # Reachable placement for the ROS PathPlanner (until the marked-corner transform
+  # + raised fixture are measured — decision 5 / session-log 2026-07-22 §2). The
+  # part footprint is shifted so its centre sits at scan_anchor_m [x,y] (off the
+  # base's singular column) and its lowest point is raised to pedestal_z_m, in the
+  # arm's reach sweet-spot (~0.3–0.7 m above the table). Tune to match the fixture.
+  scan_anchor_m: [0.30, 0.0]
+  pedestal_z_m: 0.40
 
 # --- Frames & units (architecture.md §6) -----------------------------------
 # Part/CAD frame: millimetres, Y-up (the STEP file's own frame).

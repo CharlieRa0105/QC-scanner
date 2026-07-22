@@ -29,7 +29,7 @@ import sys
 
 import rclpy
 from geometry_msgs.msg import Point, Pose
-from moveit_msgs.srv import ApplyPlanningScene, GetCartesianPath
+from moveit_msgs.srv import ApplyPlanningScene, GetCartesianPath, GetPositionIK
 from qc_msgs.action import PlanPath
 from qc_msgs.msg import ScanPath, ScanWaypoint
 from rclpy.action import ActionServer
@@ -55,6 +55,10 @@ class PathPlannerNode(Node):
             GetCartesianPath, "/compute_cartesian_path", callback_group=self._cbg)
         self._scene_cli = self.create_client(
             ApplyPlanningScene, "/apply_planning_scene", callback_group=self._cbg)
+        # IK client to seed each scan line's cartesian start_state (so the trace
+        # starts at the line's first waypoint, not the arm's current straight pose).
+        self._ik_cli = self.create_client(
+            GetPositionIK, "/compute_ik", callback_group=self._cbg)
         self._server = ActionServer(
             self, PlanPath, "/plan_path", self._execute, callback_group=self._cbg)
         self.get_logger().info(
@@ -75,6 +79,22 @@ class PathPlannerNode(Node):
             if stem == part_id and ext.lower() in (".step", ".stp", ".stl", ".obj"):
                 return os.path.join(cad_dir, fn)
         raise FileNotFoundError(f"no CAD for part_id {part_id!r} in {cad_dir}")
+
+    def _reachable_shift(self, part_points_m, planner_cfg):
+        """Translation (dx,dy,dz) to move the part footprint centre onto a reachable
+        anchor (off the base's singular column) and raise its lowest point to a
+        pedestal height in the arm's reach sweet-spot. Config (planner section):
+        `scan_anchor_m` = [x,y] (default [0.30, 0.0]); `pedestal_z_m` (default 0.40).
+        Placeholder until the marked-corner transform + fixture height are measured."""
+        anchor = (planner_cfg.get("scan_anchor_m") or [0.30, 0.0])
+        ax, ay = float(anchor[0]), float(anchor[1])
+        pedestal = float(planner_cfg.get("pedestal_z_m", 0.40))
+        xs = [v[0] for v in part_points_m]
+        ys = [v[1] for v in part_points_m]
+        zs = [v[2] for v in part_points_m]
+        cx = (min(xs) + max(xs)) / 2.0
+        cy = (min(ys) + max(ys)) / 2.0
+        return (ax - cx, ay - cy, pedestal - min(zs))
 
     def _execute(self, goal_handle):
         part_id = goal_handle.request.part_id
@@ -144,6 +164,21 @@ class PathPlannerNode(Node):
                 sw.incidence_deg = float(r["incidence_angle_deg"])
                 sw.line_id = int(wp.line_id)
                 scanpath.waypoints.append(sw)
+
+            # Reachable placement. The identity corner_transform leaves the part at
+            # its CAD origin -- straddling the base's singular column (x=y=0) and
+            # mostly BELOW the arm's reach (a part on the table is ~1 m down; the
+            # flange only reaches ~0.09 m above the table). Shift the whole scene so
+            # the footprint centre sits at a reachable anchor (off the column) and
+            # the part's lowest point is raised to a pedestal height in the reach
+            # sweet-spot. This is the placeholder for the measured corner_transform +
+            # the raised fixture (decision 5 / session-log 2026-07-22 §2).
+            part_points_m = [ft.apply_point(v) for v in verts]  # part->table frame (m)
+            dx, dy, dz = self._reachable_shift(part_points_m, p)
+            for sw in scanpath.waypoints:
+                sw.pose.position.x += dx; sw.pose.position.y += dy; sw.pose.position.z += dz
+                sw.target.x += dx; sw.target.y += dy; sw.target.z += dz
+            part_points_m = [[v[0] + dx, v[1] + dy, v[2] + dz] for v in part_points_m]
             self._scanpath_pub.publish(scanpath)
 
             fb("moveit", 0.8)
@@ -153,10 +188,10 @@ class PathPlannerNode(Node):
             # trajectory + a clear message, but the ScanPath is still returned.
             from path_planner import moveit_planner as mp
 
-            part_points_m = [ft.apply_point(v) for v in verts]  # part->table frame (m)
             trajectory, fraction, mv_msg = mp.plan_scanpath(
                 self, self._cart_cli, self._scene_cli,
                 scanpath, part_points_m, faces, cfg,
+                ik_client=self._ik_cli,
             )
             self._traj_pub.publish(trajectory.joint_trajectory)
 
