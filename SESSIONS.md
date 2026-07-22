@@ -105,10 +105,19 @@ job tmp dir (not committed); the kept ROS checks are
   **[−120°, 115°]** (arm was swinging J2 into its mounting rail); UI J2 max 120→115.
   Guards joint-space commands only — Cartesian scans still route J2 via the controller.
 - **Jog-to-targets fixed**: replaced the fragile 4 s hold timer with a per-joint
-  `edited` hold so typed targets aren't clobbered by telemetry before Jog.
-- **Decision:** move IK off the controller into **ROS 2 + MoveIt** (own IK) so every
-  arm command is joint angles → rail-avoidance on the whole path + accurate sim.
-  Scaffolding already exists (`qc_moveit_config`, `moveit_planner.py`, `sr5_arm_driver`).
+  `edited` hold; then split into **two columns** (live position vs commanded target).
+- **ROS 2 / MoveIt — BUILT + proven on the mock** (Docker `qc-humble`; real arm never
+  commanded): MoveIt models the **gantry** (plate + posts) and refuses to hit it;
+  PathPlanner produces a **collision-free scan trajectory (fraction 1.00, ~1196
+  joint points)** after reachable placement + IK-seeded cartesian; MovementDriver
+  executes on the mock, TaskManager orchestrates `/mission/plan`; console previews
+  `/plan/trajectory` over rosbridge; **collision-checked jog** refuses self/gantry
+  jog targets. IK = KDL. Fixed en route: gmsh off-thread init, MovementDriver
+  power-on, `.gitignore` swallowing the MoveIt config.
+- **Open:** browser-verify the console preview/jog/gantry; free-space (OMPL) bridges
+  between scan lines (coded, failing 0/8); placement is a placeholder for the
+  measured corner transform + fixture; TracIK deferred. Full detail + resume anchor:
+  `docs/session-logs/2026-07-22.md`.
 
 ---
 
