@@ -87,6 +87,31 @@ STANDOFF_M = float(os.environ.get("QC_STANDOFF_M", "0.25"))         # 200-300 mm
 # 25/25 via read-only calcIk); z tunes the scan plane height above the standoff.
 SCAN_OFFSET_M = tuple(float(v) for v in
                       os.environ.get("QC_SCAN_OFFSET_M", "0.15,0.0,0.0").split(","))
+# Arm HOME pose, stored as JOINT angles (degrees, one per revolute joint). Every
+# scan MoveJ's here at its start and end (go_home), so the arm always begins and
+# parks at a known, non-singular pose. Stored as JOINTS -- homing uses MoveJ
+# (gated only by QC_ALLOW_MOTION), NOT cartesian MoveL, which is disabled on the
+# real arm and singular near this pose. Measured 2026-07-22 with the arm parked at
+# XYZ (-88.1, 21.4, -553.5) mm / RPY (87.2, -0.7, 1.2) deg in the endInRef frame.
+# Override with QC_HOME_JOINTS_DEG="j1,j2,j3,j4,j5,j6".
+HOME_JOINTS_DEG = [-71.38, 93.33, 127.11, 157.33, -61.23, -77.06]
+_env_home = os.environ.get("QC_HOME_JOINTS_DEG")
+if _env_home:
+    try:
+        HOME_JOINTS_DEG = [float(x) for x in _env_home.split(",")]
+    except ValueError:
+        pass
+
+# HARD safety limit on J2 (the shoulder joint, index 1). Since we lowered the arm,
+# J2 can swing into the RAIL it is mounted on. This is a HARDCODED software clamp:
+# every joint-space command (jog / home / move_joints) whose J2 target falls outside
+# [J2_MIN_DEG, J2_MAX_DEG] is REFUSED outright -- the arm does not move at all.
+# LIMITATION: this only guards JOINT-space commands. A Cartesian move (MoveL/MoveJ to
+# a pose) lets the CONTROLLER choose the joint solution, so it can still route J2 into
+# the rail mid-path. Truly bounding J2 on Cartesian scans needs us to own the IK
+# (ROS 2 + MoveIt) -- see the 2026-07-22 session log.
+J2_INDEX = 1
+J2_MIN_DEG, J2_MAX_DEG = -120.0, 115.0
 # Cartesian scan-path tracing (follow_path -> MoveL) uses the still-UNVALIDATED
 # pose units/rpy convention, so it is DISABLED on the real arm by default. Prove
 # move_pose at low speed with Ra + the E-stop first, then set QC_ALLOW_SCAN_TRACE=1
@@ -645,11 +670,24 @@ class RobotBridge:
         not a continuous jog."""
         speed = float(speed_mms) if speed_mms else DEFAULT_JOG_SPEED
         try:
-            targets_rad = [math.radians(float(a)) for a in joints_deg]
+            targets_deg = [float(a) for a in joints_deg]
+            targets_rad = [math.radians(a) for a in targets_deg]
         except (TypeError, ValueError) as e:
             with self._lock:
                 s = self._status_locked()
                 s.update({"ok": False, "action": "move", "error": f"bad joint targets: {e}"})
+                return s
+        # HARD J2 (shoulder) rail guard -- refuse BEFORE commanding: a J2 target outside
+        # the safe band would swing the arm into its own mounting rail. Enforced on every
+        # joint-space command (jog / home / move_joints).
+        if len(targets_deg) > J2_INDEX and not (J2_MIN_DEG <= targets_deg[J2_INDEX] <= J2_MAX_DEG):
+            with self._lock:
+                s = self._status_locked()
+                s.update({"ok": False, "action": "move",
+                          "error": (f"J2 target {targets_deg[J2_INDEX]:.2f}° outside safe range "
+                                    f"[{J2_MIN_DEG:.0f}°, {J2_MAX_DEG:.0f}°] — refused (rail guard)")})
+                self._blog(f"[bridge] J2 RAIL GUARD: refused move — J2={targets_deg[J2_INDEX]:.2f}° "
+                           f"out of [{J2_MIN_DEG:.0f}, {J2_MAX_DEG:.0f}]")
                 return s
         with self._lock:
             if self._arm is not None and len(targets_rad) != getattr(self._arm, "n", len(targets_rad)):
@@ -664,6 +702,28 @@ class RobotBridge:
                 if not arm.move(targets_rad, speed):
                     raise RuntimeError(arm.get_status() or "move rejected")
             return self._motion_locked("move", _do)
+
+    def go_home(self, speed_mms=None, timeout_s=60.0):
+        """MoveJ to the stored HOME joint pose and WAIT for the arm to arrive.
+
+        Called at the start and end of every scan (see start_scan_trace /
+        start_follow_path) so the arm always begins and parks at a known,
+        non-singular pose. Uses MoveJ (move_joints), which is gated only by
+        QC_ALLOW_MOTION -- NOT the cartesian MoveL that is disabled on the real
+        arm. move_joints returns as soon as motion STARTS, so we _wait_settle for
+        completion. Returns move_joints' status dict with 'settled' added (True
+        iff the arm reached home before the timeout / without an abort)."""
+        self._blog(f"[bridge] HOME: MoveJ to {HOME_JOINTS_DEG} deg")
+        s = self.move_joints(HOME_JOINTS_DEG, speed_mms=speed_mms)
+        if not s.get("ok"):
+            self._blog(f"[bridge] HOME move rejected: {s.get('error')}")
+            s["settled"] = False
+            return s
+        settled = self._wait_settle(timeout_s)
+        s["settled"] = settled
+        self._blog("[bridge] HOME reached" if settled
+                   else "[bridge] HOME move did not settle (abort/timeout)")
+        return s
 
     def move_pose_once(self, position, quaternion, speed_mms=None, keep_orientation=False):
         """One cartesian move to a probe pose (metres, quat [x,y,z,w], arm/table
@@ -770,8 +830,24 @@ class RobotBridge:
                 with self._lock:
                     self._follow["completed"] = completed
                     self._follow["total"] = total
+            # Return to HOME before tracing: a known, non-singular start pose.
+            self._abort.clear()
+            home = self.go_home(speed_mms=speed_mms)
+            if not (home.get("ok") and home.get("settled")):
+                err = f"homing before scan failed: {home.get('error') or 'did not settle'}"
+                self._blog(f"[bridge] FOLLOW NOT STARTED: {err}")
+                with self._lock:
+                    self._follow = {"running": False, "completed": 0,
+                                    "total": len(waypoints), "aborted": False,
+                                    "error": err, "ok": False}
+                return
             rep = self.follow_path(waypoints, speed_mms=speed_mms, settle_s=settle_s,
                                    on_progress=_progress, position_only=position_only)
+            # Park at HOME when the trace ends -- but not after an operator abort.
+            if rep.get("aborted"):
+                self._blog("[bridge] follow aborted -- leaving arm in place, not auto-homing")
+            else:
+                self.go_home(speed_mms=speed_mms)
             with self._lock:
                 self._follow = {"running": False, "completed": rep["completed"],
                                 "total": rep["total"], "aborted": rep["aborted"],
@@ -993,6 +1069,19 @@ class RobotBridge:
                 with self._lock:
                     self._follow["completed"] = done
                     self._follow["total"] = total
+            # Return to HOME before scanning: a known, non-singular start pose (and
+            # the pose scan_trace anchors its footprint to). A fresh scan starts with
+            # the abort flag clear so the homing wait isn't cancelled by a prior stop.
+            self._abort.clear()
+            home = self.go_home(speed_mms=speed_mms)
+            if not (home.get("ok") and home.get("settled")):
+                err = f"homing before scan failed: {home.get('error') or 'did not settle'}"
+                self._blog(f"[bridge] SCAN NOT STARTED: {err}")
+                with self._lock:
+                    self._follow = {"running": False, "completed": 0,
+                                    "total": len(waypoints), "aborted": False,
+                                    "error": err, "ok": False}
+                return
             try:
                 rep = self.scan_trace(waypoints, incidence_deg=incidence_deg,
                                       speed_mms=speed_mms, orient_rpy=orient_rpy,
@@ -1003,6 +1092,13 @@ class RobotBridge:
                 self._blog(f"[bridge] scan_trace crashed: {e}")
                 rep = {"completed": 0, "total": len(waypoints), "aborted": False,
                        "error": f"scan_trace crashed: {e}", "ok": False}
+            # Park at HOME when the scan ends -- but NOT after an operator abort /
+            # E-stop: the operator stopped deliberately (and after E-stop the motors
+            # are off, so a MoveJ would be refused anyway). Leave the arm in place.
+            if rep.get("aborted"):
+                self._blog("[bridge] scan aborted -- leaving arm in place, not auto-homing")
+            else:
+                self.go_home(speed_mms=speed_mms)
             with self._lock:
                 self._follow = {"running": False, "completed": rep.get("completed", 0),
                                 "total": rep.get("total", len(waypoints)),

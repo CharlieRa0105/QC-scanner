@@ -94,7 +94,7 @@ def _load_qc_config():
 # Real SR5 connection layer (xCore SDK). Lives in this backend dir;
 # robot_bridge.py owns the single connection + serialises SDK access, and
 # exposes the arm's motion commands (power/drag/jog/stop/clear-alarm).
-from robot_bridge import BRIDGE as ROBOT
+from robot_bridge import BRIDGE as ROBOT, HOME_JOINTS_DEG
 
 # Scan lifecycle + results store (stub pipeline: real plumbing, honest empty
 # data until scanner capture / QC exist).
@@ -405,7 +405,8 @@ class QCRequestHandler(SimpleHTTPRequestHandler):
         # ---- robot MOTION (drives the physical SR5) ----
         # Each returns the fresh status dict tagged {ok, action, error?}.
         if route in ("/api/robot/power", "/api/robot/drag", "/api/robot/stop",
-                     "/api/robot/estop", "/api/robot/clear_alarm", "/api/robot/move"):
+                     "/api/robot/estop", "/api/robot/clear_alarm", "/api/robot/move",
+                     "/api/robot/home"):
             try:
                 if route == "/api/robot/power":
                     result = ROBOT.set_power(bool(payload.get("on", True)))
@@ -417,6 +418,12 @@ class QCRequestHandler(SimpleHTTPRequestHandler):
                     result = ROBOT.estop()
                 elif route == "/api/robot/clear_alarm":
                     result = ROBOT.clear_alarm()
+                elif route == "/api/robot/home":
+                    # MoveJ to the SINGLE source of truth for home (HOME_JOINTS_DEG),
+                    # same one the scan start/end uses. Non-blocking (returns once
+                    # motion starts) so the single-threaded server keeps serving the
+                    # UI's joint polling while the arm travels home.
+                    result = ROBOT.move_joints(HOME_JOINTS_DEG, payload.get("speedMms"))
                 else:  # /api/robot/move
                     result = ROBOT.move_joints(payload.get("joints", []),
                                                payload.get("speedMms"))
