@@ -15,6 +15,8 @@
 <script src="./vendor/react-dom.production.min.js"></script>
 
 <script src="./support.js"></script>
+<!-- rosbridge client (raw WebSocket) — used for the collision-checked jog. -->
+<script src="./viewer/ros_bridge.js"></script>
 </head>
 <body>
 <x-dc>
@@ -850,6 +852,27 @@ class Component extends DCLogic {
       return r;
     }catch(e){ this._log('error','arm', action+' failed: '+e); return {ok:false,error:String(e)}; }
   };
+  // Collision-checked jog: pre-flight a joint target against MoveIt's
+  // /check_state_validity over rosbridge (Phase-3 graph). Returns
+  // {available, valid, contacts}. Lazy-connects to ws://<host>:9090; if the ROS
+  // graph / rosbridge is down it returns available:false so the caller can
+  // fail-open with a warning. NOTE: checks the TARGET state (self + scene), not
+  // the whole path — enough to stop jogging INTO a self/gantry collision.
+  _rosConnect(){
+    if(this._ros || !window.QCRos) return this._ros || null;
+    this._ros = QCRos.connect('ws://'+(location.hostname||'127.0.0.1')+':9090', {});
+    return this._ros;
+  }
+  _checkCollision=async (jointsDeg)=>{
+    const ros=this._rosConnect();
+    if(!ros || !ros.callService) return {available:false};
+    const rad=jointsDeg.map(d=>(+d)*Math.PI/180);
+    const args={group_name:'rokae_arm', robot_state:{joint_state:{
+      name:['joint1','joint2','joint3','joint4','joint5','joint6'], position:rad}}};
+    const r=await ros.callService('/check_state_validity','moveit_msgs/GetStateValidity',args,4000);
+    if(r.unavailable) return {available:false};
+    return {available:true, valid:!!(r.values&&r.values.valid), contacts:(r.values&&r.values.contacts)||[]};
+  };
   toggleMotors=async ()=>{
     const on=!this.state.motorsOn;
     await this._motion('power',{on}, on?'Motors energised':'Motors de-energised');
@@ -884,6 +907,14 @@ class Component extends DCLogic {
     if(!this.state.connected){ this._log('warn','arm','Jog ignored — arm not connected'); return; }
     const armJoints=this.state.joints.filter(j=>j.u==='°').slice(0,6).map(j=>+(+j.cmd).toFixed(2));
     if(!window.confirm('Jog the arm to the commanded joint angles?\n['+armJoints.join(', ')+'] °\nEnsure the cell is clear.')) return;
+    // Collision-checked jog: refuse a target that self-collides or hits the gantry.
+    const chk=await this._checkCollision(armJoints);
+    if(chk.available && !chk.valid){
+      const c=(chk.contacts&&chk.contacts[0]) ? (chk.contacts[0].contact_body_1+'↔'+chk.contacts[0].contact_body_2) : 'self/scene collision';
+      this._log('warn','arm','Jog REFUSED — target collides ('+c+'). Adjust the angles.');
+      return;
+    }
+    if(!chk.available) this._log('warn','arm','Collision check unavailable (ROS graph down) — proceeding unchecked');
     await this._motion('move',{joints:armJoints, speedMms:this.state.motionSpeed}, 'Jog → ['+armJoints.join(', ')+']° @ '+this.state.motionSpeed+'mm/s');
     // Targets sent — release the edit holds so the rows track live telemetry again
     // (you watch the arm travel to the target in real time).

@@ -13,9 +13,10 @@
  */
 window.QCRos = (function () {
   // Connect and (re)subscribe. `handlers`: { subscribe:[{topic,type}], onMsg(topic,msg),
-  // onStatus(state) }. Returns { close(), connected() }.
+  // onStatus(state) }. Returns { close(), connected(), callService(service,type,args,timeoutMs) }.
   function connect(url, handlers) {
-    let ws = null, closed = false, retry = 0, live = false;
+    let ws = null, closed = false, retry = 0, live = false, seq = 0;
+    const pending = {};   // rosbridge service call id -> {resolve, timer}
 
     function open() {
       try { ws = new WebSocket(url); } catch (e) { schedule(); return; }
@@ -28,13 +29,13 @@ window.QCRos = (function () {
       };
       ws.onmessage = (e) => {
         let m; try { m = JSON.parse(e.data); } catch (_) { return; }
-        if (m.op === 'publish' && handlers.onMsg) handlers.onMsg(m.topic, m.msg);
+        if (m.op === 'publish' && handlers.onMsg) { handlers.onMsg(m.topic, m.msg); return; }
+        if (m.op === 'service_response' && pending[m.id]) {
+          const p = pending[m.id]; delete pending[m.id]; clearTimeout(p.timer);
+          p.resolve({ ok: m.result !== false, values: m.values || {} });
+        }
       };
-      ws.onclose = () => {
-        live = false;
-        handlers.onStatus && handlers.onStatus('disconnected');
-        schedule();
-      };
+      ws.onclose = () => { live = false; handlers.onStatus && handlers.onStatus('disconnected'); schedule(); };
       ws.onerror = () => { try { ws.close(); } catch (_) {} };
     }
     function schedule() {
@@ -43,8 +44,23 @@ window.QCRos = (function () {
       setTimeout(open, Math.min(5000, 400 * retry));   // backoff, cap 5 s
     }
 
+    // Call a ROS service. Resolves {ok, values} on response, or {ok:false,
+    // unavailable:true} if not connected / times out (so callers can fail-open).
+    function callService(service, type, args, timeoutMs) {
+      return new Promise((resolve) => {
+        if (!live || !ws) { resolve({ ok: false, unavailable: true }); return; }
+        const id = 'svc_' + (++seq);
+        const timer = setTimeout(() => {
+          if (pending[id]) { delete pending[id]; resolve({ ok: false, unavailable: true }); }
+        }, timeoutMs || 4000);
+        pending[id] = { resolve, timer };
+        try { ws.send(JSON.stringify({ op: 'call_service', service: service, type: type, args: args || {}, id: id })); }
+        catch (_) { clearTimeout(timer); delete pending[id]; resolve({ ok: false, unavailable: true }); }
+      });
+    }
+
     open();
-    return { close() { closed = true; try { ws.close(); } catch (_) {} }, connected() { return live; } };
+    return { close() { closed = true; try { ws.close(); } catch (_) {} }, connected() { return live; }, callService };
   }
 
   return { connect };
