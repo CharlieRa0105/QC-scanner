@@ -29,7 +29,7 @@ import sys
 
 import rclpy
 from geometry_msgs.msg import Point, Pose
-from moveit_msgs.srv import ApplyPlanningScene, GetCartesianPath, GetPositionIK
+from moveit_msgs.srv import ApplyPlanningScene, GetCartesianPath, GetMotionPlan, GetPositionIK
 from qc_msgs.action import PlanPath
 from qc_msgs.msg import ScanPath, ScanWaypoint
 from rclpy.action import ActionServer
@@ -59,6 +59,9 @@ class PathPlannerNode(Node):
         # starts at the line's first waypoint, not the arm's current straight pose).
         self._ik_cli = self.create_client(
             GetPositionIK, "/compute_ik", callback_group=self._cbg)
+        # Free-space (OMPL) planning for the moves BETWEEN scan lines.
+        self._plan_cli = self.create_client(
+            GetMotionPlan, "/plan_kinematic_path", callback_group=self._cbg)
         self._server = ActionServer(
             self, PlanPath, "/plan_path", self._execute, callback_group=self._cbg)
         self.get_logger().info(
@@ -191,7 +194,7 @@ class PathPlannerNode(Node):
             trajectory, fraction, mv_msg = mp.plan_scanpath(
                 self, self._cart_cli, self._scene_cli,
                 scanpath, part_points_m, faces, cfg,
-                ik_client=self._ik_cli,
+                ik_client=self._ik_cli, plan_client=self._plan_cli,
             )
             self._traj_pub.publish(trajectory.joint_trajectory)
 
