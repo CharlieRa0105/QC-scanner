@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  qc_cell.srdf — semantic model for the QC cell (arm + overhead gantry).
+
+  Mirrors the vendor rokae_xMateSR5_moveit_config SRDF (group `rokae_arm`, the
+  arm self-collision matrix) and ADDS the gantry collision exceptions needed
+  because qc_cell.urdf.xacro introduces the mounting-frame links.
+
+  Robot name MUST stay `xMate_robot` (matches qc_cell.urdf.xacro + the vendor).
+
+  Gantry rules (see qc_cell.urdf.xacro):
+    * gantry_plate overlaps the arm base (it is bolted to it) -> disable
+      plate<->base and plate<->link1, or every plan is a permanent collision.
+    * the plate rests on the two posts -> disable plate<->post (they touch).
+    * DELIBERATELY LEFT ENABLED: gantry_plate <-> link2..6. That is the arm
+      swinging UP into the plate — exactly the J2-into-rail collision we want
+      MoveIt to plan around. Same for the posts vs every arm link.
+-->
+<robot name="xMate_robot">
+    <group name="rokae_arm">
+        <joint name="joint1"/>
+        <joint name="joint2"/>
+        <joint name="joint3"/>
+        <joint name="joint4"/>
+        <joint name="joint5"/>
+        <joint name="joint6"/>
+        <chain base_link="xMateSR5_base" tip_link="xMateSR5_link6"/>
+    </group>
+
+    <!-- ==== vendor arm self-collision matrix (adjacent / never) ==== -->
+    <disable_collisions link1="xMateSR5_base"  link2="xMateSR5_link1" reason="Adjacent"/>
+    <disable_collisions link1="xMateSR5_link1" link2="xMateSR5_link2" reason="Adjacent"/>
+    <disable_collisions link1="xMateSR5_link2" link2="xMateSR5_link3" reason="Adjacent"/>
+    <disable_collisions link1="xMateSR5_link2" link2="xMateSR5_link4" reason="Never"/>
+    <disable_collisions link1="xMateSR5_link3" link2="xMateSR5_link4" reason="Adjacent"/>
+    <disable_collisions link1="xMateSR5_link3" link2="xMateSR5_link5" reason="Never"/>
+    <disable_collisions link1="xMateSR5_link3" link2="xMateSR5_link6" reason="Never"/>
+    <disable_collisions link1="xMateSR5_link4" link2="xMateSR5_link5" reason="Adjacent"/>
+    <disable_collisions link1="xMateSR5_link4" link2="xMateSR5_link6" reason="Never"/>
+    <disable_collisions link1="xMateSR5_link5" link2="xMateSR5_link6" reason="Adjacent"/>
+
+    <!-- ==== gantry exceptions (required so plans aren't permanently blocked) ==== -->
+    <!-- plate is bolted to the base -> overlaps base + link1 -->
+    <disable_collisions link1="gantry_plate" link2="xMateSR5_base"  reason="Adjacent"/>
+    <disable_collisions link1="gantry_plate" link2="xMateSR5_link1" reason="Adjacent"/>
+    <!-- plate rests on the posts -->
+    <disable_collisions link1="gantry_plate" link2="gantry_post_px" reason="Adjacent"/>
+    <disable_collisions link1="gantry_plate" link2="gantry_post_nx" reason="Adjacent"/>
+    <!-- posts don't touch each other; base sits between them, well clear -->
+    <disable_collisions link1="gantry_post_px" link2="gantry_post_nx" reason="Never"/>
+    <disable_collisions link1="gantry_post_px" link2="xMateSR5_base" reason="Never"/>
+    <disable_collisions link1="gantry_post_nx" link2="xMateSR5_base" reason="Never"/>
+</robot>

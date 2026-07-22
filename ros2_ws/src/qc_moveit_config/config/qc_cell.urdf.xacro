@@ -1,0 +1,85 @@
+<?xml version="1.0"?>
+<!--
+  qc_cell.urdf.xacro
+
+  The QC scanning cell: the ROKAE xMate SR5 mounted OVERHEAD. The vendor
+  description (rokae_description) roots the arm at a `world` link with its base
+  pointing +Z (arm extends up). In this cell the arm is suspended above the
+  table: its base is 1.2 m above the table surface and rotated 180 deg about X so
+  the arm reaches DOWN toward the part on the table.
+
+  Frame model (all metres, Z-up):
+    table                  the cell root; the table top is z = 0.
+    world                  the arm mounting frame, 1.0 m above the table (vendor 'world').
+    xMateSR5_base .. link6  the arm, hanging down from `world`.
+    gantry_*               the aluminium mounting frame the arm hangs from (below).
+
+  MoveIt's planning/model frame is the root, `table`, so the scan-path waypoints
+  and the table/part collision objects are all expressed in the table frame.
+
+  The part CAD mesh and the table box are NOT in this URDF; they are runtime
+  MoveIt collision objects added by PathPlanner (architecture decision 12), since
+  the part changes per mission.
+
+  GANTRY (measured 2026-07-22): the SR5 hangs upside-down from a 1650x410x10 mm
+  aluminium plate that rests on TWO 80x40 mm vertical extrusion posts (1650 mm
+  outside-to-outside, along the table's 2000 mm / X axis). The plate sits right at
+  the mount plane (z = MOUNT_Z), directly above the base; this is the surface the
+  J2 limit [-120,115] guards against. Modeled as fixed collision boxes so MoveIt
+  plans AROUND them (the coarse J2 limit stays as a backstop). Base is centered on
+  the plate. The plate necessarily overlaps the arm's base link, so the QC SRDF
+  (qc_cell.srdf) MUST disable that collision pair or every plan is rejected.
+-->
+
+<!-- robot name MUST match the vendor SRDF (<robot name="xMate_robot">) so MoveIt
+     binds the semantic model (planning group + self-collision matrix) to it. -->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="xMate_robot">
+
+  <!-- SR5 arm + its 'world' mounting frame (links, joints, collision meshes). -->
+  <xacro:include filename="$(find rokae_description)/urdf/xMateSR5.urdf.xacro"/>
+
+  <!-- Arm-base-to-table gap (m): measured 1.0 m (2026-07-22). Keep in sync with the
+       console's workspace config (config/local_config.yaml base_xyz_mm[2]). -->
+  <xacro:property name="mount_z" value="1.0"/>
+
+  <!-- Cell root: the table. -->
+  <link name="table"/>
+
+  <!-- Overhead mount: arm base MOUNT_Z up, flipped 180 deg about X to point down. -->
+  <joint name="cell_mount" type="fixed">
+    <parent link="table"/>
+    <child link="world"/>
+    <origin xyz="0 0 ${mount_z}" rpy="3.14159265358979 0 0"/>
+  </joint>
+
+  <!-- ===================== Gantry (fixed collision geometry) ================= -->
+  <!-- A box link rigidly fixed to the table. Visual + collision share geometry;
+       aluminium-grey, semi-transparent so it doesn't hide the arm in RViz. -->
+  <xacro:macro name="gantry_box" params="name sx sy sz x y z">
+    <link name="${name}">
+      <visual>
+        <geometry><box size="${sx} ${sy} ${sz}"/></geometry>
+        <material name="gantry_alu"><color rgba="0.72 0.74 0.78 0.5"/></material>
+      </visual>
+      <collision>
+        <geometry><box size="${sx} ${sy} ${sz}"/></geometry>
+      </collision>
+    </link>
+    <joint name="${name}_joint" type="fixed">
+      <parent link="table"/>
+      <child link="${name}"/>
+      <origin xyz="${x} ${y} ${z}" rpy="0 0 0"/>
+    </joint>
+  </xacro:macro>
+
+  <!-- Top plate: 1.65 (X) x 0.41 (Y) x 0.01 (Z), underside on the mount plane. -->
+  <xacro:gantry_box name="gantry_plate" sx="1.65" sy="0.41" sz="0.01"
+                    x="0" y="0" z="${mount_z + 0.005}"/>
+  <!-- Two posts: 0.08 (X) x 0.04 (Y), floor->plate; outer faces at X = +/-0.825
+       (1.65 outside-to-outside), so 0.08-wide post centres sit at +/-0.785. -->
+  <xacro:gantry_box name="gantry_post_px" sx="0.08" sy="0.04" sz="${mount_z}"
+                    x="0.785" y="0" z="${mount_z / 2.0}"/>
+  <xacro:gantry_box name="gantry_post_nx" sx="0.08" sy="0.04" sz="${mount_z}"
+                    x="-0.785" y="0" z="${mount_z / 2.0}"/>
+
+</robot>

@@ -21,6 +21,10 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
         ros-humble-ros2-controllers \
         ros-humble-rosbridge-suite \
     && rm -rf /var/lib/apt/lists/*
+# IK solver: MoveIt's built-in KDL plugin (ships with ros-humble-moveit) is used
+# for now. TracIK is NOT in the Humble apt repo (no ros-humble-trac-ik-* package),
+# so adding it means a from-source colcon build of trac_ik_kinematics_plugin --
+# deferred until/unless KDL's reliability proves insufficient.
 
 # Source ROS2 for every interactive shell.
 RUN echo 'source /opt/ros/humble/setup.bash' >> /root/.bashrc && \

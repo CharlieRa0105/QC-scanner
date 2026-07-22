@@ -5,9 +5,10 @@ Bring up MoveIt's move_group for the overhead-mounted SR5 (planning only -- no
 trajectory execution controllers, which is what PathPlanner needs to plan
 collision-free trajectories via the compute_cartesian_path service).
 
-It reuses the vendor SR5 MoveIt config (SRDF self-collision matrix, kinematics,
-OMPL) but overrides the robot_description with qc_cell.urdf.xacro so the arm is
-mounted 1.2 m above the table, pointing down.
+It reuses the vendor SR5 MoveIt config (kinematics, OMPL) but overrides the
+robot_description with qc_cell.urdf.xacro (arm mounted 1.0 m above the table,
+pointing down, + the gantry collision boxes) and the semantic model with our
+qc_cell.srdf (vendor self-collision matrix + the gantry collision exceptions).
 
 We publish the model with robot_state_publisher and feed a joint_state_publisher
 (zeros) so move_group's PlanningSceneMonitor always has a current robot state --
@@ -33,7 +34,10 @@ def generate_launch_description():
     moveit_config = (
         MoveItConfigsBuilder("xMateSR5", package_name="rokae_xMateSR5_moveit_config")
         .robot_description(file_path=cell_xacro)
-        .robot_description_semantic(file_path="config/xMateSR5.srdf")
+        # OUR semantic model (gantry collision exceptions), not the vendor SRDF.
+        .robot_description_semantic(
+            file_path=os.path.join(
+                get_package_share_directory("qc_moveit_config"), "config", "qc_cell.srdf"))
         # our kinematics.yaml (longer IK timeout than the vendor's 5 ms)
         .robot_description_kinematics(
             file_path=os.path.join(
