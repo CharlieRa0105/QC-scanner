@@ -99,6 +99,21 @@
       );
       edges.position.copy(box.position);
       cellGroup.add(edges);
+
+      // ---------- gantry: the aluminium frame the arm hangs from ------------
+      // Mirrors qc_cell.urdf.xacro (MoveIt collision geometry): a 1.65 x 0.41 x
+      // 0.01 m plate at the mount plane + two 0.08 x 0.04 m posts at X = +/-0.785
+      // running table->plate. So the operator SEES what J2 can swing into.
+      const galMat = new THREE.MeshStandardMaterial({
+        color: 0xb2b7c0, metalness: 0.5, roughness: 0.5, transparent: true, opacity: 0.6 });
+      const plate = new THREE.Mesh(new THREE.BoxGeometry(1.65, 0.41, 0.01), galMat);
+      plate.position.set(0, 0, H + 0.005);
+      cellGroup.add(plate);
+      for (const px of [0.785, -0.785]) {
+        const post = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.04, H), galMat);
+        post.position.set(px, 0, H / 2);
+        cellGroup.add(post);
+      }
     }
 
     // ---------- groups -------------------------------------------------------
