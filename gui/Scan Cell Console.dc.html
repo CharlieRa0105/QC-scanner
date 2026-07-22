@@ -387,16 +387,17 @@
             <sc-for list="{{ joints }}" as="j" hint-placeholder-count="7">
               <div style="display:grid;grid-template-columns:150px 1fr 118px 66px 62px 54px;gap:0;padding:10px 16px;align-items:center;border-bottom:1px solid var(--color-charcoal-100)">
                 <span style="font-size:12px;font-weight:600">{{ j.n }}</span>
-                <!-- slider: absolute joint command, clamped to the joint's range -->
-                <span style="padding-right:16px;display:flex;flex-direction:column;gap:2px">
+                <!-- COMMAND: slider + numeric input set the TARGET (cmd), clamped to range -->
+                <span style="padding-right:16px;display:flex;flex-direction:column;gap:3px">
                   <input type="range" min="{{ j.min }}" max="{{ j.max }}" step="{{ j.step }}" value="{{ j.raw }}" onInput="{{ j.setSlider }}" style="width:100%;accent-color:var(--color-lime-500);cursor:pointer" />
-                  <span style="font-size:9.5px;color:var(--color-charcoal-400);font-family:var(--font-mono)">{{ j.rangeLabel }}</span>
+                  <span style="display:flex;align-items:center;gap:4px">
+                    <input type="number" min="{{ j.min }}" max="{{ j.max }}" step="{{ j.step }}" value="{{ j.raw }}" onInput="{{ j.setInput }}" style="width:70px;height:28px;padding:0 6px;border:1px solid var(--color-charcoal-200);border-radius:5px;font-family:var(--font-mono);font-size:12px;font-weight:600;text-align:right;outline:none" />
+                    <span style="font-size:10px;color:var(--color-charcoal-500)">{{ j.unit }}</span>
+                    <span style="font-size:9.5px;color:var(--color-charcoal-400);font-family:var(--font-mono);margin-left:auto">{{ j.rangeLabel }}</span>
+                  </span>
                 </span>
-                <!-- numeric input: type an exact angle/position (same clamp) -->
-                <span style="display:flex;align-items:center;gap:4px;justify-content:center">
-                  <input type="number" min="{{ j.min }}" max="{{ j.max }}" step="{{ j.step }}" value="{{ j.raw }}" onInput="{{ j.setInput }}" style="width:72px;height:30px;padding:0 6px;border:1px solid var(--color-charcoal-200);border-radius:5px;font-family:var(--font-mono);font-size:12px;font-weight:600;text-align:right;outline:none" />
-                  <span style="font-size:10px;color:var(--color-charcoal-500);width:16px">{{ j.unit }}</span>
-                </span>
+                <!-- POSITION: live telemetry, read-only -->
+                <span style="font-family:var(--font-mono);font-size:12px;text-align:center;font-weight:600;color:var(--color-charcoal-700)">{{ j.pos }}</span>
                 <span style="font-family:var(--font-mono);font-size:12px;text-align:right;color:var(--color-charcoal-500)">{{ j.vel }}</span>
                 <span style="font-family:var(--font-mono);font-size:12px;text-align:right;color:{{ j.tqColor }}">{{ j.tq }}</span>
                 <span style="font-family:var(--font-mono);font-size:12px;text-align:right;color:var(--color-charcoal-500)">{{ j.t }}</span>
@@ -432,7 +433,7 @@
                 <button onClick="{{ goToPoint }}" style="height:32px;padding:0 14px;border:0;border-radius:6px;background:#000;color:#fff;font-size:12px;font-weight:700;cursor:pointer;font-family:var(--font-sans)">Go to point</button>
               </span>
             </div>
-            <div style="padding:0 16px 12px;font-size:11px;color:var(--color-charcoal-500)">Same frame as the readout above (homed ≈ 0, 135, 1259 mm). Reachability is decided by the controller — an unreachable target comes back as an arm error in the log, nothing is faked.</div>
+            <div style="padding:0 16px 12px;font-size:11px;color:var(--color-charcoal-500)">Same frame as the readout above (home ≈ −88, 21, −554 mm). Reachability is decided by the controller — an unreachable target comes back as an arm error in the log, nothing is faked.</div>
           </div>
 
           <!-- scan-path trace removed from the Debug tab: scanning is driven by the
@@ -488,14 +489,16 @@ class Component extends DCLogic {
     // live poll (/api/robot/joints) once connected. Temperature isn't exposed
     // by the driver, so it stays '—'. The rail is a separate axis and isn't
     // commanded from this console yet, so its row is display-only.
+    // v = LIVE position (read-only, always from telemetry); cmd = COMMANDED target
+    // (editable, held once edited until Jog). Two columns show both side by side.
     const JOINTS0=[
-      {n:'J1 · base',v:0,u:'°',vel:0.0,tq:0,t:0,min:-170,max:170},
-      {n:'J2 · shoulder',v:0,u:'°',vel:0.0,tq:0,t:0,min:-120,max:120},
-      {n:'J3 · elbow',v:0,u:'°',vel:0.0,tq:0,t:0,min:-170,max:170},
-      {n:'J4 · wrist 1',v:0,u:'°',vel:0.0,tq:0,t:0,min:-170,max:170},
-      {n:'J5 · wrist 2',v:0,u:'°',vel:0.0,tq:0,t:0,min:-120,max:120},
-      {n:'J6 · wrist 3',v:0,u:'°',vel:0.0,tq:0,t:0,min:-360,max:360},
-      {n:'Rail · linear',v:0,u:'m',vel:0.0,tq:0,t:0,min:0,max:3},
+      {n:'J1 · base',v:0,cmd:0,u:'°',vel:0.0,tq:0,t:0,min:-170,max:170},
+      {n:'J2 · shoulder',v:0,cmd:0,u:'°',vel:0.0,tq:0,t:0,min:-120,max:115},
+      {n:'J3 · elbow',v:0,cmd:0,u:'°',vel:0.0,tq:0,t:0,min:-170,max:170},
+      {n:'J4 · wrist 1',v:0,cmd:0,u:'°',vel:0.0,tq:0,t:0,min:-170,max:170},
+      {n:'J5 · wrist 2',v:0,cmd:0,u:'°',vel:0.0,tq:0,t:0,min:-120,max:120},
+      {n:'J6 · wrist 3',v:0,cmd:0,u:'°',vel:0.0,tq:0,t:0,min:-360,max:360},
+      {n:'Rail · linear',v:0,cmd:0,u:'m',vel:0.0,tq:0,t:0,min:0,max:3},
     ];
     const LOGS0=[];
     this.state = {
@@ -655,11 +658,14 @@ class Component extends DCLogic {
       // Velocity/torque telemetry always updates.
       // controller-reported flange pose (raw SDK cartPosture) for the debug strip
       if('tcp' in d) this._tcpRaw = d.tcp;
-      const holding = this._jointHold && performance.now() < this._jointHold;
-      // Map live arm joints (6) onto the display rows by index; extra rows
-      // (e.g. the rail) are left untouched.
+      // Map live arm joints onto the display rows by index; extra rows (e.g. the
+      // rail) are left untouched. POSITION (v) always tracks live telemetry. The
+      // COMMAND target (cmd) follows live as a sensible default UNTIL the operator
+      // edits it (j.edited) — then it holds until the next Jog clears the flag, so
+      // "set a target, then Jog" can't be clobbered by a poll mid-edit.
       this.setState(s=>({joints:s.joints.map((j,i)=> i<d.joints.length
-        ? {...j, v: holding ? j.v : d.joints[i].deg, vel:d.joints[i].vel, tq:Math.round(Math.abs(d.joints[i].torque))||j.tq}
+        ? {...j, v: d.joints[i].deg, cmd: j.edited ? j.cmd : d.joints[i].deg,
+           vel:d.joints[i].vel, tq:Math.round(Math.abs(d.joints[i].torque))||j.tq}
         : j)}));
     }catch(e){ /* transient */ }
   };
@@ -854,8 +860,8 @@ class Component extends DCLogic {
   };
   home=async ()=>{
     if(!this.state.connected){ this._log('warn','arm','Home ignored — arm not connected'); return; }
-    if(!window.confirm('Move the arm to the home pose (all six joints to 0°)?\nEnsure the cell is clear.')) return;
-    await this._motion('move',{joints:[0,0,0,0,0,0], speedMms:this.state.motionSpeed}, 'Homing — moving to all-zero joint pose');
+    if(!window.confirm('Move the arm to the stored home pose?\nEnsure the cell is clear.')) return;
+    await this._motion('home',{speedMms:this.state.motionSpeed}, 'Homing — moving to stored home pose');
     this.setState({homed:true});
   };
   toggleSoft=async ()=>{
@@ -876,9 +882,12 @@ class Component extends DCLogic {
   // Confirmed each time — this drives the real arm. Not a continuous jog.
   jogToTargets=async ()=>{
     if(!this.state.connected){ this._log('warn','arm','Jog ignored — arm not connected'); return; }
-    const armJoints=this.state.joints.filter(j=>j.u==='°').slice(0,6).map(j=>+(+j.v).toFixed(2));
+    const armJoints=this.state.joints.filter(j=>j.u==='°').slice(0,6).map(j=>+(+j.cmd).toFixed(2));
     if(!window.confirm('Jog the arm to the commanded joint angles?\n['+armJoints.join(', ')+'] °\nEnsure the cell is clear.')) return;
     await this._motion('move',{joints:armJoints, speedMms:this.state.motionSpeed}, 'Jog → ['+armJoints.join(', ')+']° @ '+this.state.motionSpeed+'mm/s');
+    // Targets sent — release the edit holds so the rows track live telemetry again
+    // (you watch the arm travel to the target in real time).
+    this.setState(s=>({joints:s.joints.map(j=>j.edited?{...j,edited:false}:j)}));
   };
 
   // ---------- "Send to robot": trace the generated scan path (demo slice) ----
@@ -955,10 +964,10 @@ class Component extends DCLogic {
   // entries ("-", "1.") don't blow the value away mid-keystroke.
   setJoint=(i,val)=>{
     if(val===null||val===undefined||Number.isNaN(val)) return;
-    // Hold the user's edit against live-joint polling for a few seconds.
-    this._jointHold = performance.now() + 4000;
+    // Edit the COMMAND target (cmd), NOT the live position (v). Mark EDITED so live
+    // polling won't overwrite it (persists until the next Jog). Clamped to range.
     this.setState(s=>({joints:s.joints.map((j,k)=>
-      k===i?{...j,v:+(Math.max(j.min,Math.min(j.max,val)).toFixed(2))}:j)}));
+      k===i?{...j,edited:true,cmd:+(Math.max(j.min,Math.min(j.max,val)).toFixed(2))}:j)}));
   };
 
   // Analytics: real records from the results store (this.SCANS, loaded from
@@ -988,10 +997,12 @@ class Component extends DCLogic {
     const joints=s.joints.map((j,i)=>({ n:j.n,
       // display readouts (temperature isn't exposed by the driver -> '—')
       val:j.v.toFixed(j.u==='m'?2:1)+' '+j.u, unit:j.u,
+      // LIVE position readout (POSITION column, read-only).
+      pos:j.v.toFixed(j.u==='m'?3:2)+' '+j.u,
       vel:(j.vel>=0?'+':'')+j.vel.toFixed(2), tq:j.tq+'%', t:(j.t>0?j.t.toFixed(0)+'°C':'—'),
-      // slider + numeric-input model: raw numeric value, bounds, and a sensible
-      // step (0.01 m for the linear rail, 1 deg for revolute joints).
-      raw:+j.v.toFixed(2), min:j.min, max:j.max, step:(j.u==='m'?0.01:1),
+      // slider + numeric-input model bind to the COMMAND target (cmd), with bounds
+      // and a sensible step (0.01 m for the linear rail, 1 deg for revolute joints).
+      raw:+j.cmd.toFixed(2), min:j.min, max:j.max, step:(j.u==='m'?0.01:1),
       rangeLabel:j.min+'…'+j.max+' '+j.u,
       // both controls drive the same absolute setter (parseFloat -> setJoint).
       setSlider:(e)=>this.setJoint(i, parseFloat(e.target.value)),
