@@ -13,7 +13,43 @@ in priority order — to reach the target architecture. Written 2026-07-15 after
 
 ---
 
-## 1. Where the repo is right now (accurate as of 2026-07-15)
+## 0. Status update — 2026-07-23 (read this first)
+
+Since the 2026-07-15 snapshot below, the build has moved a long way. Quick
+reconciliation (where this disagrees with §1, this wins):
+
+- **The full ROS 2 mission graph is now scaffolded and building** — not "to
+  build". All six nodes exist under `ros2_ws/src/` with their interfaces
+  registered: `qc_msgs` (built), `sr5_arm_driver`/arm_driver (built),
+  `path_planner` (built — coverage + frame transform + MoveIt cartesian /
+  free-space + per-waypoint IK), `movement_driver` (built scaffold),
+  `task_manager` (built scaffold), `scanner_driver` + `inspection`
+  (interface-only, hardware / algorithm-blocked). See `architecture.md` §3 for
+  the refreshed status table.
+- **MoveIt is wired**: `qc_moveit_config` + `path_planner/moveit_planner.py`
+  plan each raster line cartesian (collision-checked against a table box + the
+  part mesh) with OMPL free-space moves between lines. Degrades to
+  scanpath-only when `move_group` is down.
+- **rosbridge + Docker + one-shot launch exist**:
+  `qc_bringup/launch/rosbridge.launch.py` (ws://localhost:9090), the
+  `qc-humble` container (`docker/`), and `scripts/launch_stack.sh` bring the
+  whole stack + console + browser up together.
+- **A browser 3D viewer landed** (`gui/viewer/`, three.js, no CDN): animates
+  MoveIt's planned joint trajectory live over rosbridge; data via the HTTP API
+  (`/api/viewer_bundle`) + rosbridge topics.
+- **Task 2.3 (raster planner rewrite) is DONE** — `waypoint_generator.py` now
+  face-groups samples by normal before rastering (`_group_by_normal`). Several
+  raster strategies were added (`box_raster`, `hemisphere_raster`,
+  `contour_raster`, `lawnmower_raster`, `multiview_lawnmower`) plus
+  `frame_transform.py`, `placement.py`, `table_clearance.py`, and
+  `libs/qc_config.py`.
+- **Still open**: the two rival paths to the arm (§2.2) still coexist (console
+  SDK vs the ROS `arm_driver`); the marked-corner calibration (decision 5) is
+  still a placeholder shift; ScanningDriver + Phase 2 remain blocked.
+
+---
+
+## 1. Where the repo was on 2026-07-15 (historical snapshot)
 
 The repo is currently **the operator console only**. A cleanup commit removed a lot
 of older/half-built material; some of it is coming back properly, some is gone for
@@ -72,6 +108,7 @@ exists, the console's direct path is the working one — keep it, but don't buil
 mission logic on it beyond the demo slice (§3.1).
 
 ### 2.3 Rewrite the raster planner (`waypoint_generator.py`)
+> **DONE (2026-07-23):** face-grouping by normal landed (`_group_by_normal`) — see §0.
 The recovered `waypoint_generator.py` works but has a **design limit**: it buckets
 surface points into raster lines by a single coordinate and never separates them by
 **normal direction**. On non-prismatic parts this (a) collapses everything to one

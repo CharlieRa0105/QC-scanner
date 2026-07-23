@@ -198,6 +198,11 @@ class QCRequestHandler(SimpleHTTPRequestHandler):
                 self._send_json(404, {"ok": False,
                                       "error": f"no {VIEWER_BUNDLE_FILE.name} — run scripts/export_viewer_bundle.py"})
             return
+        # Last plan requested through the console (part_id + orient/planner/standoff).
+        # Lets the Debug viewport trigger the ROS mission (/mission/plan) by part id.
+        if route == "/api/plan/last":
+            self._send_json(200, {"ok": bool(LAST_PLAN.get("part_id")), **LAST_PLAN})
+            return
         # ---- part catalogue (real CAD files on disk) ----
         if route == "/api/parts":
             self._send_json(200, {"ok": True, "parts": list_parts()})

@@ -20,6 +20,86 @@ let ready = false;
   const v = QCViewer.create($('canvas'), { config, sizeToWindow: true, onFrame });
 
   await v.buildArm('assets/arm/');
+
+  // ---- live arm mirror (matches the main viewer) ---------------------------
+  // Push the controller's live joint angles onto the sim arm (FK) so the Debug
+  // viewport ALWAYS shows the current arm pose. Yields while a local replay
+  // (play.on) or a planned-trajectory playback owns the arm.
+  // Single-source arm posing by priority (see viewer.js): preview > fresh live
+  // telemetry > HOME. A disconnected arm holds HOME, steady, until commanded.
+  const HOME_RAD = [-71.38, 93.33, 127.11, 157.33, -61.23, -77.06].map((d) => d * Math.PI / 180);
+  let previewing = false;
+  let liveJoints = null, liveAt = 0;
+  const LIVE_FRESH_MS = 1500;
+  v.setJoints(HOME_RAD);   // start at HOME until telemetry arrives
+  function syncArm() {
+    if (!v.play.on && !previewing && v.setJoints) {
+      const fresh = liveJoints && (performance.now() - liveAt < LIVE_FRESH_MS);
+      v.setJoints(fresh ? liveJoints : HOME_RAD);
+    }
+    setTimeout(syncArm, 125);
+  }
+  syncArm();
+
+  // ---- rosbridge: calculated-joint preview + mission runner ----------------
+  // Animate the EXACT MoveIt-planned joint trajectory (/plan/trajectory) — the
+  // same joints the real arm runs (IK owned by MoveIt/KDL, not the controller).
+  // "Scan → arm" plans+executes that trajectory via the ROS mission. Degrades
+  // silently if the ROS graph / rosbridge is down.
+  let rosConn = null;
+  let mission = { active: false, awaitExec: false, lastPhase: null };
+  let lastTrajSig = '';   // dedupe latched /plan/trajectory re-delivery (flicker fix)
+  async function execMission() {
+    if (!rosConn || !rosConn.callService) return;
+    setStatus('mission: executing planned joint trajectory…');
+    let r; try { r = await rosConn.callService('/mission/execute', 'std_srvs/Trigger', {}, 600000); }
+    catch (e) { r = { unavailable: true }; }
+    if (r.unavailable) setStatus('mission: execute request failed (rosbridge)');
+    else if (!(r.values && r.values.success)) setStatus('mission: execute rejected — ' + ((r.values && r.values.message) || 'unknown'));
+  }
+  function onMissionState(m) {
+    const phase = m.phase || '';
+    if (mission.active && phase !== mission.lastPhase) {
+      setStatus('mission: ' + phase + (m.detail ? ' — ' + m.detail : '')); mission.lastPhase = phase;
+    }
+    if (!mission.active) return;
+    if (phase === 'planned' && mission.awaitExec) {
+      mission.awaitExec = false;
+      // DECOUPLED: plan does not auto-move the arm — inspect the preview, then confirm.
+      if (confirm('Plan ready — trajectory previewing in the view.\n\nExecute on the ARM now? The arm WILL move; keep the E-stop in reach.')) execMission();
+      else { mission.active = false; setStatus('plan ready — execution cancelled (not run)'); }
+    }
+    else if (phase === 'complete') { mission.active = false; setStatus('mission complete'); }
+    else if (phase === 'aborted') { mission.active = false; setStatus('mission aborted'); }
+    else if (phase === 'error') { mission.active = false; setStatus('mission error — ' + (m.detail || 'unknown')); }
+  }
+  if (window.QCRos) {
+    const rosUrl = 'ws://' + (location.hostname || '127.0.0.1') + ':9090';
+    rosConn = QCRos.connect(rosUrl, {
+      subscribe: [
+        { topic: '/plan/trajectory', type: 'trajectory_msgs/JointTrajectory' },
+        { topic: '/mission/state', type: 'qc_msgs/MissionState' },
+        { topic: '/arm/joint_states', type: 'sensor_msgs/JointState' },
+      ],
+      onMsg: (topic, msg) => {
+        if (topic === '/plan/trajectory' && msg.points && msg.points.length) {
+          const pts = msg.points;
+          const sig = pts.length + ':' + JSON.stringify(pts[0].positions) + ':' + JSON.stringify(pts[pts.length - 1].positions);
+          if (sig !== lastTrajSig) {                 // skip re-delivered identical trajectory
+            lastTrajSig = sig;
+            previewing = true;
+            v.playJointTrajectory(pts, { onDone: () => { previewing = false; } });
+            if (!mission.active) setStatus('MoveIt preview — ' + pts.length + ' calculated joint points');
+          }
+        } else if (topic === '/mission/state') {
+          onMissionState(msg);
+        } else if (topic === '/arm/joint_states' && msg.position && msg.position.length) {
+          liveJoints = msg.position; liveAt = performance.now();   // radians + freshness
+        }
+      },
+    });
+  }
+
   let scanWps = [];                        // planner scan path (part frame)
   let domeInfo = null;                     // enclosing hemisphere {center,radius} (dome planner)
   let boxInfo = null;                      // enclosing rectangle {center,half_dims} (box planner)
@@ -208,30 +288,32 @@ let ready = false;
     spd.oninput = () => { scanSpeedMms = +spd.value; showSpd(); };
   }
 
+  // "Scan → arm" now runs the scan as a MoveIt JOINT TRAJECTORY via the ROS
+  // mission (plan on MoveIt/KDL, then execute on the MovementDriver as absolute
+  // joint commands — no controller IK). The SAME /plan/trajectory animates the
+  // sim arm above, so the sim and the real arm run identical joints. Orientation /
+  // standoff / speed are owned by the planner, so the old per-send speed no longer
+  // applies here. The mission runs by part id (fetched from /api/plan/last).
   const scanBtn = $('scanArmBtn');
   if (scanBtn) scanBtn.onclick = async () => {
-    if (!scanWps.length) { setStatus('no scan path to send'); return; }
-    const rpy = orient;
-    if (!confirm(`Run the scan at orient [${rpy.map((x) => x.toFixed(0)).join(', ')}]° ` +
-                 `(aim at part ±10°) at ${scanSpeedMms} mm/s?\n` +
+    if (mission.active) { setStatus('a mission is already running'); return; }
+    if (!rosConn || !rosConn.callService) {
+      setStatus('ROS graph not reachable (rosbridge :9090) — cannot run the joint-trajectory scan'); return;
+    }
+    let partId = '';
+    try { const lp = await (await fetch('/api/plan/last')).json(); partId = (lp && lp.part_id) || ''; } catch (e) { /* none */ }
+    if (!partId) { setStatus('no planned part — plan a part in the console first'); return; }
+    if (!confirm(`Plan and run the scan for ${partId} on the arm as a MoveIt joint trajectory?\n` +
                  `The arm will MOVE. Ensure the cell is clear and the E-stop is in reach.`)) return;
-    setStatus(`sending scan to the arm at ${scanSpeedMms} mm/s…`);
-    try {
-      const r = await (await fetch('/api/robot/scan_trace', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ confirm: true, incidenceDeg: 10, orientRpyDeg: rpy, speedMms: scanSpeedMms }),
-      })).json();
-      if (!r.ok || !r.started) { setStatus('arm refused: ' + (r.error || 'unknown')); return; }
-      const poll = setInterval(async () => {
-        try {
-          const st = await (await fetch('/api/robot/follow_status')).json();
-          if (st.running) { setStatus(`scanning ${st.completed || 0}/${st.total || 0}…`); return; }
-          clearInterval(poll);
-          setStatus(st.ok ? `scan complete — ${st.completed}/${st.total}` :
-                    `scan ${st.aborted ? 'aborted' : 'failed'} at ${st.completed}/${st.total}${st.error ? ' — ' + st.error : ''}`);
-        } catch (e) { clearInterval(poll); }
-      }, 300);
-    } catch (e) { setStatus('backend unreachable: ' + e.message); }
+    mission = { active: true, awaitExec: true, lastPhase: null };
+    setStatus('mission: planning (MoveIt/KDL) for ' + partId + '…');
+    let r; try { r = await rosConn.callService('/mission/plan', 'qc_msgs/StartMission', { part_id: partId }, 120000); }
+    catch (e) { r = { unavailable: true }; }
+    if (r.unavailable) { mission.active = false; setStatus('mission: plan request failed (rosbridge)'); return; }
+    if (!(r.values && r.values.accepted)) {
+      mission.active = false; setStatus('mission: plan rejected — ' + ((r.values && r.values.message) || 'unknown')); return;
+    }
+    // /mission/execute fires from onMissionState() once phase === 'planned'.
   };
 
   // live arm-comms monitor (separate window)
@@ -316,14 +398,9 @@ let ready = false;
   window.__dbg = { v, replay, orient: () => orient };
   ready = true;
 
-  // Camera-follow re-aims the preview arm at the orbit look-at -- EXCEPT during a
-  // replay, when the arm follows the PATH (placeAt IK-poses it), so we must not
-  // fight it.
-  let acc = 0;
-  function onFrame(dt) {
-    if (!ready || !v.arm.ready) return;
-    if (v.play.on) return;                 // replay owns the arm; skip camera-follow
-    acc += dt; if (acc < 0.05) return; acc = 0;
-    v.solveIK(v.tipWorld(), v.controls.target.clone(), 8);
-  }
+  // Camera-follow REMOVED: it re-posed the arm with CCD-IK toward the orbit target
+  // every frame, which fought the live/HOME posing (syncArm) and the trajectory
+  // preview -> the flicker/alternation. The arm is now driven ONLY by syncArm
+  // (preview > live > HOME). onFrame is intentionally a no-op.
+  function onFrame() {}
 })();

@@ -200,15 +200,24 @@ const setStatus = (t) => { $('statusText').textContent = t; };
   // via forward kinematics (setJoints, radians) so the sim always matches the real
   // arm. Only mirrors when connected AND no local playback is running (playback
   // owns the arm during a replay). Poll ~8 Hz.
-  let mirror = true;
-  async function syncArm() {
-    if (mirror && !v.play.on) {
-      try {
-        const j = await (await fetch('/api/robot/joints')).json();
-        if (j && j.connected && Array.isArray(j.joints) && j.joints.length && v.setJoints) {
-          v.setJoints(j.joints.map((q) => (q.deg || 0) * Math.PI / 180));
-        }
-      } catch (e) { /* offline — leave the sim arm as-is */ }
+  // The sim arm is driven by EXACTLY ONE source each tick, by priority:
+  //   1. a planned-trajectory preview (previewing) — owns the arm while playing;
+  //   2. live telemetry (/arm/joint_states) when it's FRESH (arm connected);
+  //   3. otherwise HOME — so a disconnected arm holds the home pose, steady, until
+  //      commanded (no flicker, no stale/zero pose).
+  // Single-source => the live mirror and the preview can never both write the joints
+  // (that double-write was the flicker).
+  const HOME_RAD = [-71.38, 93.33, 127.11, 157.33, -61.23, -77.06].map((d) => d * Math.PI / 180);
+  let previewing = false;
+  let liveJoints = null, liveAt = 0;   // last /arm/joint_states + when (performance.now)
+  // /plan/trajectory is LATCHED — it re-delivers on every rosbridge (re)connect.
+  // Dedupe so an identical trajectory isn't replayed (that re-play was part of the flicker).
+  let lastTrajSig = '';
+  const LIVE_FRESH_MS = 1500;
+  function syncArm() {
+    if (!v.play.on && !previewing && v.setJoints) {
+      const fresh = liveJoints && (performance.now() - liveAt < LIVE_FRESH_MS);
+      v.setJoints(fresh ? liveJoints : HOME_RAD);
     }
     setTimeout(syncArm, 125);
   }
@@ -217,26 +226,37 @@ const setStatus = (t) => { $('statusText').textContent = t; };
   // ---- content --------------------------------------------------------------
   setStatus('loading…');
   await v.buildArm('assets/arm/');
+  v.setJoints(HOME_RAD);   // start at HOME (not the zero pose) until telemetry arrives
 
   // ---- MoveIt trajectory preview over rosbridge (Phase 3) --------------------
   // If the ROS graph is up (qc_bringup → rosbridge on :9090), animate the arm
   // through the EXACT joints MoveIt planned (accurate sim). Silently retries if
   // rosbridge isn't reachable, so the viewer still works off the HTTP API alone.
-  // NOTE: while a trajectory previews, the live HTTP joint-sync (syncArm) also
-  // writes joints — for a clean preview, use one source at a time (tune later).
+  // A received trajectory plays ONCE, taking arm ownership (previewing=true) for the
+  // duration and handing back to the live mirror on completion (onDone) — so the two
+  // sources are mutually exclusive and the steady state is "shows the current arm".
   if (window.QCRos) {
     const rosUrl = 'ws://' + (location.hostname || '127.0.0.1') + ':9090';
     QCRos.connect(rosUrl, {
       subscribe: [
         { topic: '/plan/trajectory', type: 'trajectory_msgs/JointTrajectory' },
         { topic: '/mission/state', type: 'qc_msgs/MissionState' },
+        { topic: '/arm/joint_states', type: 'sensor_msgs/JointState' },
       ],
       onMsg: (topic, msg) => {
         if (topic === '/plan/trajectory' && msg.points && msg.points.length) {
-          v.playJointTrajectory(msg.points, { loop: true });
-          setStatus('MoveIt preview — ' + msg.points.length + ' trajectory points');
+          const pts = msg.points;
+          const sig = pts.length + ':' + JSON.stringify(pts[0].positions) + ':' + JSON.stringify(pts[pts.length - 1].positions);
+          if (sig !== lastTrajSig) {                 // skip re-delivered identical trajectory
+            lastTrajSig = sig;
+            previewing = true;
+            v.playJointTrajectory(pts, { onDone: () => { previewing = false; } });
+            setStatus('MoveIt preview — ' + pts.length + ' trajectory points');
+          }
         } else if (topic === '/mission/state') {
           setStatus('mission: ' + msg.phase + (msg.detail ? ' — ' + msg.detail : ''));
+        } else if (topic === '/arm/joint_states' && msg.position && msg.position.length) {
+          liveJoints = msg.position; liveAt = performance.now();   // radians + freshness stamp
         }
       },
     });

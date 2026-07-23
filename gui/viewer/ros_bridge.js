@@ -16,12 +16,14 @@ window.QCRos = (function () {
   // onStatus(state) }. Returns { close(), connected(), callService(service,type,args,timeoutMs) }.
   function connect(url, handlers) {
     let ws = null, closed = false, retry = 0, live = false, seq = 0;
-    const pending = {};   // rosbridge service call id -> {resolve, timer}
+    const pending = {};        // rosbridge service call id -> {resolve, timer}
+    const advertised = new Set();   // topics we've advertised on THIS socket
 
     function open() {
       try { ws = new WebSocket(url); } catch (e) { schedule(); return; }
       ws.onopen = () => {
         live = true; retry = 0;
+        advertised.clear();    // new socket: re-advertise before the next publish
         handlers.onStatus && handlers.onStatus('connected');
         for (const s of (handlers.subscribe || [])) {
           ws.send(JSON.stringify({ op: 'subscribe', topic: s.topic, type: s.type }));
@@ -59,8 +61,20 @@ window.QCRos = (function () {
       });
     }
 
+    // Publish a message to a topic (advertising once per socket first). Returns
+    // false if not connected so callers can surface "ROS graph down". Used to drive
+    // the arm over /arm/command (jog) when arm I/O is owned by the ROS graph.
+    function publish(topic, type, msg) {
+      if (!live || !ws) return false;
+      try {
+        if (!advertised.has(topic)) { ws.send(JSON.stringify({ op: 'advertise', topic: topic, type: type })); advertised.add(topic); }
+        ws.send(JSON.stringify({ op: 'publish', topic: topic, msg: msg || {} }));
+        return true;
+      } catch (_) { return false; }
+    }
+
     open();
-    return { close() { closed = true; try { ws.close(); } catch (_) {} }, connected() { return live; }, callService };
+    return { close() { closed = true; try { ws.close(); } catch (_) {} }, connected() { return live; }, callService, publish };
   }
 
   return { connect };

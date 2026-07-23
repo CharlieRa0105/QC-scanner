@@ -52,6 +52,19 @@ try:
 except ValueError:
     pass
 
+# Cartesian jump threshold: MoveIt rejects a joint-space "teleport" (e.g. a wrist
+# branch flip between adjacent cartesian samples) whose per-joint step exceeds this
+# factor times the path average. 0.0 DISABLES the check -- which lets a flip through
+# as one violent, table-clipping point in the trajectory. A moderate value (default
+# 5.0) truncates the line at the flip instead: a continuous, non-lurching path at the
+# cost of a possibly-lower fraction. Tunable via QC_CARTESIAN_JUMP_THRESHOLD (set 0
+# to restore the old permissive behaviour). Re-check the min fraction after changing.
+CARTESIAN_JUMP_THRESHOLD = 5.0
+try:
+    CARTESIAN_JUMP_THRESHOLD = float(_os.environ.get("QC_CARTESIAN_JUMP_THRESHOLD", CARTESIAN_JUMP_THRESHOLD))
+except ValueError:
+    pass
+
 
 def make_table_object(config):
     """A box for the table surface, top at table z=0 (architecture decision 12).
@@ -115,12 +128,18 @@ def apply_scene(node, apply_client, objects, timeout=10.0):
     return (bool(r and r.success), "scene applied" if r and r.success else "scene apply failed")
 
 
-def compute_ik(node, ik_client, pose, timeout=5.0):
+def compute_ik(node, ik_client, pose, timeout=5.0, seed_joints=None):
     """IK for a single Pose (table frame) -> a RobotState at that pose, or None.
     Used to SEED a cartesian path's start_state so the trace begins at the line's
     first waypoint (otherwise compute_cartesian_path starts from the robot's
     current state -- arm straight down -- and the first straight-line segment to
-    the scan pose is infeasible, giving fraction 0)."""
+    the scan pose is infeasible, giving fraction 0).
+
+    `seed_joints` (JOINT_NAMES-ordered, optional) sets the IK request's robot_state
+    so KDL returns the solution NEAREST that configuration. Passing the previous
+    scan line's END joints keeps consecutive lines in the SAME arm branch -- without
+    it, each line's IK picks an arbitrary branch and adjacent lines can differ by
+    200-500 deg, which the arm executes as a violent spin between lines."""
     if ik_client is None or not ik_client.wait_for_service(timeout_sec=2.0):
         return None
     req = GetPositionIK.Request()
@@ -129,6 +148,9 @@ def compute_ik(node, ik_client, pose, timeout=5.0):
     r.pose_stamped = PoseStamped()
     r.pose_stamped.header.frame_id = PLANNING_FRAME
     r.pose_stamped.pose = pose
+    if seed_joints is not None:
+        r.robot_state.joint_state.name = list(JOINT_NAMES)
+        r.robot_state.joint_state.position = [float(v) for v in seed_joints]
     r.timeout.sec = 1
     r.avoid_collisions = True
     fut = ik_client.call_async(req)
@@ -150,6 +172,35 @@ def _joints_in_order(robot_state):
     return None
 
 
+def compute_waypoint_ik(node, ik_client, scanpath, timeout=5.0):
+    """Diagnostic: a KDL IK solution for EVERY scan waypoint pose (table frame),
+    pairing each Cartesian pose with its 6 joint angles. Returns a
+    JSON-serialisable dict:
+      {part_id, frame, count, solved,
+       waypoints:[{i, line_id, pose:{x,y,z,qx,qy,qz,qw}, joints_rad:[j1..j6]|None}]}
+
+    This is what the console prints to its Log stream (pose <-> IK). Unlike the
+    cartesian trajectory (interpolated at max_step, NOT 1:1 with waypoints), this
+    is a clean per-waypoint pose->joints mapping. A waypoint with no collision-free
+    IK comes back joints_rad=None (never faked). N service round-trips, so it's
+    plan-time only; disable via QC_LOG_WAYPOINT_IK=0 in the node if the cost hurts."""
+    out = {"part_id": scanpath.part_id, "frame": PLANNING_FRAME,
+           "count": len(scanpath.waypoints), "solved": 0, "waypoints": []}
+    for i, wp in enumerate(scanpath.waypoints):
+        joints = _joints_in_order(compute_ik(node, ik_client, wp.pose, timeout=timeout))
+        if joints is not None:
+            out["solved"] += 1
+        p = wp.pose
+        out["waypoints"].append({
+            "i": i, "line_id": int(wp.line_id),
+            "pose": {"x": p.position.x, "y": p.position.y, "z": p.position.z,
+                     "qx": p.orientation.x, "qy": p.orientation.y,
+                     "qz": p.orientation.z, "qw": p.orientation.w},
+            "joints_rad": joints,
+        })
+    return out
+
+
 def plan_line(node, cart_client, poses, max_step=0.01, timeout=30.0, seed=None):
     """Compute a collision-checked cartesian path through `poses` (Pose[] in the
     table frame). Returns (RobotTrajectory, fraction). fraction < 1.0 means MoveIt
@@ -167,7 +218,7 @@ def plan_line(node, cart_client, poses, max_step=0.01, timeout=30.0, seed=None):
         req.start_state = seed
     req.waypoints = list(poses)
     req.max_step = max_step
-    req.jump_threshold = 0.0
+    req.jump_threshold = CARTESIAN_JUMP_THRESHOLD   # reject branch-flip teleports (0 = off)
     req.avoid_collisions = True          # <-- MoveIt refuses self/scene collisions
     fut = cart_client.call_async(req)
     _spin(node, fut, timeout)
@@ -232,7 +283,9 @@ def plan_scanpath(node, cart_client, apply_client, scanpath, part_points_m, part
     prev_end = None   # JOINT_NAMES-ordered joints at the end of the last line
     for line_id in sorted(lines):
         poses = lines[line_id]
-        seed = compute_ik(node, ik_client, poses[0]) if (ik_client and poses) else None
+        # Seed this line's IK from the PREVIOUS line's end config (continuity) so the
+        # whole path stays in one arm branch -- no 200-500 deg flips between lines.
+        seed = compute_ik(node, ik_client, poses[0], seed_joints=prev_end) if (ik_client and poses) else None
         start_joints = _joints_in_order(seed)
         # free-space bridge: move from where the last line ended to this line's start
         if prev_end is not None and start_joints is not None:

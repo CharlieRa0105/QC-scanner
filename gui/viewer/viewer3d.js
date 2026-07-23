@@ -340,16 +340,36 @@
     // Points: [{positions:[rad...], time_from_start:{sec,nanosec}}].
     let jtraj = null;
     function playJointTrajectory(points, opts) {
-      if (!points || !points.length || !arm.ready) return;
+      if (!points || !points.length || !arm.ready) { if (opts && opts.onDone) opts.onDone(); return; }
+      const pts = points.map((p) => p.positions || []);
       const secs = points.map((p) => (p.time_from_start
         ? p.time_from_start.sec + (p.time_from_start.nanosec || 0) * 1e-9 : 0));
-      // Synthesize uniform timing if MoveIt didn't stamp times (all zero).
       const dur = secs[secs.length - 1];
-      const times = dur > 0 ? secs : points.map((_, i) => i * ((opts && opts.step) || 0.4));
-      jtraj = { pts: points.map((p) => p.positions), times, t: 0, loop: !!(opts && opts.loop) };
+      let times;
+      if (dur > 0) {
+        times = secs;                                   // MoveIt-timed trajectory: use as-is
+      } else {
+        // No time-parameterisation from the planner: PACE each segment by its max
+        // joint delta at a nominal joint speed, so a large joint jump (e.g. between
+        // scan lines, where the free-space bridges are absent) plays as a SMOOTH move
+        // of proportional duration instead of a fixed-0.4s teleport that swings the
+        // arm through the table. This mirrors the real controller, which
+        // velocity-limits every MoveAbsJ. Tunable via opts.jointSpeed (rad/s).
+        const spd = (opts && opts.jointSpeed) || 1.0;   // rad/s (~57 deg/s)
+        const minSeg = 0.05, maxSeg = 3.0;              // clamp per-segment seconds
+        times = [0];
+        for (let i = 1; i < pts.length; i++) {
+          let d = 0; const a = pts[i], b = pts[i - 1];
+          for (let k = 0; k < a.length; k++) d = Math.max(d, Math.abs((a[k] || 0) - (b[k] || 0)));
+          times.push(times[i - 1] + Math.min(maxSeg, Math.max(minSeg, d / spd)));
+        }
+      }
+      jtraj = { pts, times, t: 0, loop: !!(opts && opts.loop), onDone: (opts && opts.onDone) || null };
       play.on = false;   // joint replay takes over from the waypoint player
     }
-    function stopJointTrajectory() { jtraj = null; }
+    function stopJointTrajectory() {
+      const cb = jtraj && jtraj.onDone; jtraj = null; if (cb) cb();
+    }
     function placeAt(t) {
       if (!waypoints.length) return;
       const n = waypoints.length;
@@ -447,7 +467,7 @@
         const span = (T[j] - T[i]) || 1, f = Math.max(0, Math.min(1, (tt - T[i]) / span));
         const a = jtraj.pts[i] || [], b = jtraj.pts[j] || a;
         if (a.length) setJoints(a.map((v, k) => v + (b[k] - v) * f));
-        if (done) jtraj = null;
+        if (done) { const cb = jtraj.onDone; jtraj = null; if (cb) cb(); }
       } else if (play.on && waypoints.length > 1) {
         let t = play.t + play.speed * dt;
         if (t >= waypoints.length - 1) { t = waypoints.length - 1; play.on = false; play.onDone && play.onDone(); }
@@ -478,7 +498,7 @@
       cfg, mountHeight: H,
       buildArm, setJoints, solveIK, tipWorld, arm,
       buildPart, buildPath, buildArmPath, placeAt, play, waypoints: () => waypoints, orientPart,
-      playJointTrajectory, stopJointTrajectory,
+      playJointTrajectory, stopJointTrajectory, isPlayingTrajectory: () => !!jtraj,
       partGroup,
       setLayer, setView, frameView, tableToArmMm, armMmToTable,
       setMountHeight, mountHeightMm,

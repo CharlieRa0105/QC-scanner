@@ -99,6 +99,16 @@
     </div>
   </div>
 
+  <!-- ROS graph down banner: arm I/O is owned by the ROS graph (rosbridge :9090).
+       When it's unreachable the arm can't connect and no motion is possible. -->
+  <sc-if value="{{ rosDown }}" hint-placeholder-val="{{ false }}">
+    <div style="display:flex;align-items:center;gap:10px;flex:none;background:#DA1E28;color:#fff;padding:7px 20px;font-size:12px;font-weight:600;font-family:var(--font-sans)">
+      <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><use href="assets/icons.svg#slash"/></svg>
+      <span>ROS graph unreachable (rosbridge ws&nbsp;:9090). The arm is controlled by the ROS graph — start it to connect:&nbsp;
+        <code style="font-family:var(--font-mono);background:rgba(0,0,0,.25);padding:1px 6px;border-radius:4px">ros2 launch qc_bringup qc_mission.launch.py</code></span>
+    </div>
+  </sc-if>
+
   <!-- ============ TAB BAR ============ -->
   <div style="display:flex;align-items:center;height:46px;flex:none;background:#fff;border-bottom:1px solid var(--color-charcoal-100);padding:0 8px">
     <button onClick="{{ goRun }}" style="height:100%;padding:0 20px;border:0;background:transparent;cursor:pointer;font-family:var(--font-sans);font-weight:700;font-size:14px;color:{{ runFg }};border-bottom:2px solid {{ runBar }};display:flex;align-items:center;gap:8px">
@@ -411,8 +421,8 @@
                SDK (cartPosture) — ground truth vs the software's frame math -->
           <div style="border:1px solid var(--color-charcoal-100);background:#fff">
             <div style="padding:12px 16px;display:flex;align-items:center;gap:14px;flex-wrap:wrap">
-              <span style="font-weight:700;font-size:14px">Robot head — controller-reported</span>
-              <span style="font-size:11px;font-family:var(--font-mono);color:var(--color-charcoal-500)">raw SDK cartPosture · {{ tcpFrame }} · live</span>
+              <span style="font-weight:700;font-size:14px">Robot head — our FK</span>
+              <span style="font-size:11px;font-family:var(--font-mono);color:var(--color-charcoal-500)">{{ tcpFrame }} · z-up from table · live</span>
               <span style="margin-left:auto;display:flex;align-items:center;gap:16px;font-family:var(--font-mono);font-size:13px;font-weight:600">
                 <span><span style="color:var(--color-charcoal-500);font-size:11px;font-weight:700">XYZ&nbsp;</span>{{ tcpXyz }} <span style="color:var(--color-charcoal-500);font-size:11px">mm</span></span>
                 <span><span style="color:var(--color-charcoal-500);font-size:11px;font-weight:700">RPY&nbsp;</span>{{ tcpRpy }} <span style="color:var(--color-charcoal-500);font-size:11px">deg</span></span>
@@ -424,7 +434,7 @@
           <div style="border:1px solid var(--color-charcoal-100);background:#fff">
             <div style="padding:12px 16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
               <span style="font-weight:700;font-size:14px">Go to point</span>
-              <span style="font-size:11px;font-family:var(--font-mono);color:var(--color-charcoal-500)">controller base frame, mm (matches the readout above) · translation only</span>
+              <span style="font-size:11px;font-family:var(--font-mono);color:var(--color-charcoal-500)">table/cell frame, mm · z up from the table · aim-down via our IK</span>
               <span style="margin-left:auto;display:flex;align-items:center;gap:8px">
                 <label style="display:flex;align-items:center;gap:4px;font-size:11px;font-weight:600;color:var(--color-charcoal-500)">X
                   <input type="text" inputmode="text" spellcheck="false" value="{{ gotoX }}" onInput="{{ setGotoX }}" style="width:76px;height:32px;padding:0 6px;border:1px solid var(--color-charcoal-200);border-radius:5px;font-family:var(--font-mono);font-size:12px;font-weight:600;text-align:right;outline:none" /></label>
@@ -505,8 +515,9 @@ class Component extends DCLogic {
     const LOGS0=[];
     this.state = {
       tab:'run',
-      // connection + power/mode are driven by the real backend (/api/robot/*).
-      connected:false, robotKind:null, robotNote:'', ip:'192.168.2.160',
+      // connection + power/mode are driven by the ROS ArmDriver over rosbridge.
+      // rosUp = rosbridge (ws :9090) reachable; connected = /arm/joint_states flowing.
+      connected:false, rosUp:false, armBackend:'', robotKind:null, robotNote:'', ip:'192.168.2.160',
       power:null, mode:null,            // real motor power / operate mode strings
       motorsOn:false, dragMode:false, homed:false,
       eStop:false, softStop:false,
@@ -524,11 +535,11 @@ class Component extends DCLogic {
       motionSpeed:60,   // ONE end-effector speed (mm/s) for all Debug motion: jog, home, trace
       viewerNonce:0,    // bump to force the 3D preview iframe to reload after re-planning
       debugViewportOpen:false,   // the Debugging section's 3D popup
-      // "Go to point" (Debug tab): target in the CONTROLLER BASE frame, mm —
-      // the SAME frame the "Robot head — controller-reported" strip shows, so
-      // you can validate commanded-vs-reported 1:1. Default sits near the homed
-      // pose (0,135,1259) so the first move is small + reachable.
-      gotoX:'0', gotoY:'135', gotoZ:'1150',   // RAW strings so '-', '', '1.' type freely; parsed on Go
+      // "Go to point" (Debug tab): target in the TABLE/CELL frame, mm (z up from the
+      // table). Solved via our /compute_ik (aim-down) and commanded in joint space.
+      // Default sits in the reach sweet-spot, off the base's singular column
+      // (x=300, y=0, z=650 mm) so the first move is reachable.
+      gotoX:'300', gotoY:'0', gotoZ:'650',   // RAW strings so '-', '', '1.' type freely; parsed on Go
       traceBarStyle:'height:100%;width:0%;background:var(--color-lime-500);transition:width .2s',
     };
     this._logSeq=1;
@@ -548,12 +559,50 @@ class Component extends DCLogic {
     // Real robot connection: attempt to connect on start, then poll live
     // status (every 2s) and — while the Debug tab is open — live joint state
     // (every ~1s). Replaces the previous fabricated joint telemetry.
-    this._robotConnect();
-    this._statusTick = setInterval(()=>this._pollStatus(), 2000);
-    this._jointTick = setInterval(()=>{ if(this.state.tab==='debug') this._pollJoints(); }, 1000);
+    // Arm telemetry + state now come from the ROS ArmDriver over rosbridge
+    // (/arm/joint_states + /arm/status) — arm I/O is owned by the ROS graph (Phase B),
+    // NOT the host backend. Connection = receiving joint_states; a watchdog marks it
+    // lost if the stream stops. No auto-connect to hardware: the Connect button binds
+    // an IP via /arm/connect on demand.
+    this._armLastSeen = 0;
+    this._armWatch = setInterval(()=>this._armWatchdog(), 1000);
     // Load the real part catalogue + recorded scans from the backend.
     this._loadParts();
     this._loadScans();
+    // Internal IK preview over rosbridge. The ROS PathPlanner publishes, on
+    // /plan/ik, the per-waypoint pose<->KDL-IK-joints pairing it computes for each
+    // scan (the IK we now own, not the controller's). Subscribe and print each into
+    // the Log stream (this "website terminal"). Degrades silently when the ROS graph
+    // / rosbridge is down — QCRos retries in the background and the console keeps
+    // working off the HTTP API.
+    this._ikSeen = new Set();
+    if (window.QCRos) {
+      this._ros = window.QCRos.connect(this._rosUrl(), {
+        subscribe: [
+          { topic: '/plan/ik', type: 'std_msgs/String' },
+          { topic: '/mission/state', type: 'qc_msgs/MissionState' },
+          { topic: '/arm/joint_states', type: 'sensor_msgs/JointState' },
+          { topic: '/arm/status', type: 'std_msgs/String' },
+          { topic: '/arm/backend', type: 'std_msgs/String' },
+        ],
+        onMsg: (topic, msg) => {
+          if (topic === '/plan/ik') this._onIkReport(msg);
+          else if (topic === '/mission/state') this._onMissionState(msg);
+          else if (topic === '/arm/joint_states') this._onJointStates(msg);
+          else if (topic === '/arm/status') this._onArmStatus(msg);
+          else if (topic === '/arm/backend') this._onArmBackend(msg);
+        },
+        onStatus: (st) => {
+          const up = (st === 'connected');
+          if (this.state.rosUp !== up) {   // reflect + log transitions only
+            this.setState({ rosUp: up });
+            this._log(up ? 'info' : 'warn', 'ros',
+              up ? 'rosbridge connected (ws :9090) — arm telemetry + IK live'
+                 : 'rosbridge unreachable — arm I/O offline. Start the ROS graph: ros2 launch qc_bringup qc_mission.launch.py');
+          }
+        },
+      });
+    }
   }
 
   // ---------- real part catalogue (backend /api/parts) ----------
@@ -587,89 +636,94 @@ class Component extends DCLogic {
     const t=d.toTimeString().slice(0,8)+'.'+String(d.getMilliseconds()).padStart(3,'0');
     this.setState(s=>({logs:[{t,l:level,src,m:msg},...s.logs].slice(0,200)}));
   };
+  // Prepend many rows in ONE setState (entries header-first, kept in that order at
+  // the top of the stream). Used for the per-waypoint IK dump so N waypoints don't
+  // trigger N re-renders.
+  _logBatch=(entries)=>{
+    const d=new Date();
+    const t=d.toTimeString().slice(0,8)+'.'+String(d.getMilliseconds()).padStart(3,'0');
+    const rows=entries.map(e=>({t, l:e.level||'info', src:e.src||'ik', m:e.msg}));
+    this.setState(s=>({logs:[...rows, ...s.logs].slice(0,200)}));
+  };
+
+  // ---------- internal IK (rosbridge /plan/ik) ----------
+  _rosUrl=()=>'ws://'+((typeof location!=='undefined' && location.hostname) || '127.0.0.1')+':9090';
+  _onIkReport=(msg)=>{
+    let rep; try{ rep=JSON.parse(msg.data); }catch(_){ return; }
+    // /plan/ik is LATCHED — it re-delivers the last plan on every (re)connect.
+    // Skip a report we've already printed (keyed by part + counts).
+    const sig=(rep.part_id||'')+':'+rep.count+':'+rep.solved;
+    if(this._ikSeen.has(sig)) return;
+    this._ikSeen.add(sig);
+    const R2D=180/Math.PI, wps=rep.waypoints||[];
+    const rows=[{level:'info', msg:
+      `Internal MoveIt/KDL IK — part ${rep.part_id} · ${rep.solved}/${rep.count} waypoints solved · frame ${rep.frame} (xyz metres)`}];
+    for(const w of wps){
+      const p=w.pose||{};
+      const xyz=`(${(p.x||0).toFixed(3)}, ${(p.y||0).toFixed(3)}, ${(p.z||0).toFixed(3)}) m`;
+      if(w.joints_rad && w.joints_rad.length===6){
+        const deg=w.joints_rad.map(r=>(r*R2D).toFixed(2)).join(', ');
+        const rad=w.joints_rad.map(r=>r.toFixed(4)).join(', ');
+        rows.push({level:'info', msg:`wp ${w.i} (line ${w.line_id}) · ${xyz} · J[${deg}]° · [${rad}] rad`});
+      } else {
+        rows.push({level:'warn', msg:`wp ${w.i} (line ${w.line_id}) · ${xyz} · no collision-free IK (unreachable)`});
+      }
+    }
+    this._logBatch(rows);   // Log stream keeps the most recent 200 lines.
+  };
 
   // ---------- real robot connection (backend /api/robot/*) ----------
+  // Connect/disconnect now BIND the ROS ArmDriver to an IP over /arm/connect (it
+  // owns the SR5 session), instead of the host backend opening the SDK session.
+  // Publishing an IP asks the ArmDriver to connect the REAL arm; "" releases it to
+  // the mock. Connection STATE is derived from the /arm/joint_states stream, so we
+  // just request + log here; the watchdog reflects the actual link.
   _robotConnect=async ()=>{
-    const ip=this.state.ip;
-    try{
-      const res = await fetch('/api/robot/connect', {method:'POST',
-        headers:{'Content-Type':'application/json'}, body: JSON.stringify({ip})});
-      const s = await res.json();
-      const wasConnected=this.state.connected;
-      this._applyStatus(s);
-      if(s.connected && !wasConnected)
-        this._log('info','arm',`Connected to SR5 at ${ip}`+(s.info?` · ${s.info.type||''} · SDK ${s.sdkVersion||'?'}`:''));
-      else if(!s.connected)
-        this._log('warn','arm',`Not connected to ${ip}` + (s.note?` · ${s.note}`:''));
-    }catch(e){
-      this.setState({connected:false, robotKind:null, robotNote:String(e)});
-      this._log('error','arm',`Connect request failed: ${e}`);
-    }
+    const ip=this.state.ip; const ros=this._rosConnect();
+    if(!ros || !ros.publish){ this._log('error','arm','ROS graph unreachable (rosbridge :9090) — cannot bind arm'); return; }
+    ros.publish('/arm/connect','std_msgs/String',{data:ip});
+    this._log('info','arm',`Requested ArmDriver bind to ${ip} via /arm/connect (real SR5)`);
   };
   _robotDisconnect=async ()=>{
-    try{
-      const s = await (await fetch('/api/robot/disconnect',{method:'POST',
-        headers:{'Content-Type':'application/json'}, body:'{}'})).json();
-      this._applyStatus(s);
-      this._log('info','arm','Disconnected from arm');
-    }catch(e){ this._log('error','arm',`Disconnect failed: ${e}`); }
+    const ros=this._rosConnect();
+    if(ros && ros.publish) ros.publish('/arm/connect','std_msgs/String',{data:''});
+    this._log('info','arm','Requested ArmDriver release → mock via /arm/connect');
   };
-  _pollStatus=async ()=>{
-    try{
-      const s = await (await fetch('/api/robot/status')).json();
-      const wasConnected=this.state.connected;
-      this._applyStatus(s);
-      if(wasConnected && !s.connected)
-        this._log('warn','arm',`Lost connection to ${s.ip||this.state.ip}`+(s.note?` · ${s.note}`:''));
-      else if(!wasConnected && s.connected)
-        this._log('info','arm',`Connection restored at ${s.ip||this.state.ip}`);
-    }catch(e){ /* transient; leave last known state */ }
-  };
-  // Merge a backend status/motion response into UI state, deriving the
-  // motors/drag indicators from the arm's REAL reported power + operate mode
-  // (falling back to the previous value when a field isn't present).
-  _deriveMotor=(power, mode)=>{
-    const p=(power||'').toString().toLowerCase(), m=(mode||'').toString().toLowerCase();
-    const on = /on/.test(p) && !/off|estop|gstop|stop/.test(p);
-    const drag = /drag|manual/.test(m);
-    return {on, drag};
-  };
-  _applyStatus=(s)=>{
-    if(!s) return;
-    const patch={connected:!!s.connected, robotKind:s.kind||null,
-                 robotNote:s.note||s.error||'', ip:s.ip||this.state.ip};
-    if('power' in s) patch.power=s.power;
-    if('mode' in s)  patch.mode=s.mode;
-    // Only re-derive the indicators when we actually got power/mode back;
-    // otherwise a bare status (disconnected) shouldn't wipe them.
-    if(s.connected && (s.power!=null || s.mode!=null)){
-      const d=this._deriveMotor(s.power, s.mode);
-      patch.motorsOn=d.on; patch.dragMode=d.drag;
-    } else if(!s.connected){
-      patch.motorsOn=false; patch.dragMode=false;
-    }
-    this.setState(patch);
-  };
-  _pollJoints=async ()=>{
-    try{
-      const d = await (await fetch('/api/robot/joints')).json();
-      if(!d.connected || !d.joints || !d.joints.length) return;
-      // If the operator just moved a slider / typed an angle, hold that value
-      // for a few seconds instead of snapping it back to the live read, so a
-      // target being dialled in isn't overwritten before "Jog" is pressed.
-      // Velocity/torque telemetry always updates.
-      // controller-reported flange pose (raw SDK cartPosture) for the debug strip
-      if('tcp' in d) this._tcpRaw = d.tcp;
-      // Map live arm joints onto the display rows by index; extra rows (e.g. the
-      // rail) are left untouched. POSITION (v) always tracks live telemetry. The
-      // COMMAND target (cmd) follows live as a sensible default UNTIL the operator
-      // edits it (j.edited) — then it holds until the next Jog clears the flag, so
-      // "set a target, then Jog" can't be clobbered by a poll mid-edit.
-      this.setState(s=>({joints:s.joints.map((j,i)=> i<d.joints.length
-        ? {...j, v: d.joints[i].deg, cmd: j.edited ? j.cmd : d.joints[i].deg,
-           vel:d.joints[i].vel, tq:Math.round(Math.abs(d.joints[i].torque))||j.tq}
+  // Live joint telemetry from the ROS ArmDriver (/arm/joint_states, radians). Drives
+  // the connection indicator + the joint table. Position (v) tracks live; the command
+  // target (cmd) follows live UNTIL the operator edits it (j.edited holds it until the
+  // next Jog). Table setState is throttled + only while the Debug tab is open (the 3D
+  // viewers own the live pose elsewhere); connection/last-seen track every message.
+  _onJointStates=(m)=>{
+    const pos=(m&&m.position)||[]; if(!pos.length) return;
+    const now=Date.now(); this._armLastSeen=now;
+    if(!this.state.connected) this.setState({connected:true, robotKind:'rokae-ros'});
+    if(this.state.tab==='debug' && now-(this._jsUi||0)>150){
+      this._jsUi=now;
+      this.setState(s=>({joints:s.joints.map((j,i)=> i<pos.length
+        ? {...j, v:+(pos[i]*180/Math.PI).toFixed(2), cmd: j.edited ? j.cmd : +(pos[i]*180/Math.PI).toFixed(2)}
         : j)}));
-    }catch(e){ /* transient */ }
+    }
+  };
+  // Arm status string ('idle'|'moving'|'drag'|'off'|'error:..') -> motor/drag chips.
+  _onArmStatus=(m)=>{
+    const st=((m&&m.data)||'').toString().toLowerCase();
+    this.setState({mode:st, motorsOn: !!st && !/off|error/.test(st), dragMode: /drag/.test(st)});
+  };
+  // Which backend the ArmDriver is actually on ('mock' | 'rokae <ip>'). Surfaced in
+  // the connection chip so a SILENT rokae→mock fallback (arm off/unreachable) can't
+  // masquerade as the real arm.
+  _onArmBackend=(m)=>{
+    const b=((m&&m.data)||'').toString();
+    if(b!==this.state.armBackend) this.setState({armBackend:b});
+  };
+  // Mark the arm disconnected if the joint_states stream stops (ROS graph / arm_driver
+  // down, or the ArmDriver dropped the real arm).
+  _armWatchdog=()=>{
+    if(this.state.connected && this._armLastSeen && (Date.now()-this._armLastSeen>1800)){
+      this.setState({connected:false, motorsOn:false, dragMode:false});
+      this._log('warn','arm','Arm telemetry lost — no /arm/joint_states (ROS graph / arm_driver down?)');
+    }
   };
   // Re-connect shortly after the IP field settles (debounced), so editing the
   // address actually re-targets the arm.
@@ -677,11 +731,11 @@ class Component extends DCLogic {
   componentWillUnmount(){
     this._mounted=false;
     clearInterval(this._tick);
-    clearInterval(this._statusTick);
-    clearInterval(this._jointTick);
+    clearInterval(this._armWatch);
     clearInterval(this._traceTick);
     clearInterval(this._scanTraceTick);
     clearTimeout(this._ipT);
+    if(this._ros) this._ros.close();
   }
   componentDidUpdate(){}
 
@@ -747,14 +801,41 @@ class Component extends DCLogic {
   // a leading '.', or clear the box without it fighting you. Parsing happens only
   // when you press Go.
   _setGoto=(k)=>(e)=>{ this.setState({[k]: e.target.value}); };
+  // Go to a single table-frame point (mm, z up) via OUR IK: solve /compute_ik for an
+  // AIM-DOWN pose at the target, collision-check the solution, then command the joints
+  // on /arm/command. No controller IK. Good for validating basic point-to-point motion.
   goToPoint=async ()=>{
-    if(!this.state.connected){ this._log('warn','arm','Go-to ignored — arm not connected'); return; }
     const x=parseFloat(this.state.gotoX), y=parseFloat(this.state.gotoY), z=parseFloat(this.state.gotoZ);
-    if([x,y,z].some(Number.isNaN)){ this._log('warn','arm','Go-to needs three numbers (X, Y, Z in mm)'); return; }
-    if(!window.confirm(`Send the arm to controller-frame point [${x}, ${y}, ${z}] mm at ${this.state.motionSpeed} mm/s (keeping current orientation)?\nThe arm will MOVE. Ensure the cell is clear and the E-stop is in reach.`)) return;
-    const position=[x/1000, y/1000, z/1000];       // endInRef mm -> m (no conversion; matches readout)
-    await this._motion('move_pose', {position, keepOrientation:true, speedMms:this.state.motionSpeed},
-                       `Go to [${x}, ${y}, ${z}] mm (endInRef, hold orientation) @ ${this.state.motionSpeed} mm/s`);
+    if([x,y,z].some(Number.isNaN)){ this._log('warn','arm','Go-to needs X, Y, Z in mm (table frame, z up)'); return; }
+    const ros=this._rosConnect();
+    if(!ros || !ros.callService){ this._log('error','arm','ROS graph unreachable — cannot compute IK'); return; }
+    if(!window.confirm(`Move the arm to table-frame point [${x}, ${y}, ${z}] mm (aiming down) via our IK?\nThe arm WILL move. Ensure the cell is clear and the E-stop is in reach.`)) return;
+    this._log('info','arm',`Solving IK for [${x}, ${y}, ${z}] mm (table frame, aim-down) …`);
+    // Seed IK with the arm's CURRENT joints so it returns the solution NEAREST the
+    // present pose -> a small, predictable move (not a wild branch swing).
+    const cur=this.state.joints.slice(0,6).map(j=>(((j||{}).v)||0)*Math.PI/180);
+    // aim-down orientation = 180° about X (tool +Z points down): quat (x=1,y=0,z=0,w=0)
+    const args={ ik_request:{ group_name:'rokae_arm', avoid_collisions:true, timeout:{sec:2,nanosec:0},
+      robot_state:{ joint_state:{ name:['joint1','joint2','joint3','joint4','joint5','joint6'], position:cur } },
+      pose_stamped:{ header:{frame_id:'table'},
+        pose:{ position:{x:x/1000,y:y/1000,z:z/1000}, orientation:{x:1.0,y:0.0,z:0.0,w:0.0} } } } };
+    let r; try{ r=await ros.callService('/compute_ik','moveit_msgs/GetPositionIK',args,8000); }catch(e){ r={unavailable:true}; }
+    if(r.unavailable){ this._log('error','arm','IK service unavailable (ROS graph down?)'); return; }
+    const v=r.values||{};
+    if(!(v.error_code && v.error_code.val===1)){ this._log('warn','arm',`No IK solution for [${x}, ${y}, ${z}] mm — unreachable/singular. Try a point ~300–700 mm above the table, off the base column.`); return; }
+    const js=(v.solution&&v.solution.joint_state)||{}; const nm=js.name||[], ps=js.position||[];
+    const map={}; nm.forEach((n,i)=>map[n]=ps[i]);
+    const order=['joint1','joint2','joint3','joint4','joint5','joint6'];
+    if(!order.every(n=>n in map)){ this._log('warn','arm','IK solution missing joints'); return; }
+    const deg=order.map(n=>map[n]*180/Math.PI);
+    const chk=await this._checkCollision(deg);
+    if(chk.available && !chk.valid){
+      const c=(chk.contacts&&chk.contacts[0])?(chk.contacts[0].contact_body_1+'↔'+chk.contacts[0].contact_body_2):'self/scene collision';
+      this._log('warn','arm','Go-to REFUSED — IK solution collides ('+c+')'); return;
+    }
+    if(!chk.available) this._log('warn','arm','Collision check unavailable — proceeding unchecked');
+    await this._motion('move',{joints:deg, speedMms:this.state.motionSpeed},
+      `Go-to → [${x}, ${y}, ${z}] mm (aim-down, our IK) · J[${deg.map(d=>d.toFixed(1)).join(', ')}]°`);
   };
   onPartInput=(e)=>this.setState({partId:e.target.value});
   onPartSearch=(e)=>this.setState({partQuery:e.target.value});
@@ -764,60 +845,104 @@ class Component extends DCLogic {
   // an honest 'incomplete' record (persisted to the results store) rather than
   // a fabricated pass. We show that record on the Result step and refresh the
   // Analytics list. No fake progress animation.
-  // "Confirm & start scan" = SEND TO ROBOT: trace the planned scan path CURRENTLY
-  // IN THE VIEWPORT via the SAME oriented scan trace the Debug viewport uses
-  // (/api/robot/scan_trace: aim-at-part continuous sweep). The path is whatever was
-  // last planned (server SCANPATH_FILE, the file the viewport draws). Gated on an
-  // operator confirm here; the backend re-checks connection + QC_ALLOW_MOTION +
-  // QC_ALLOW_SCAN_TRACE. Progress drives the scanning ring; on completion the scan
-  // is recorded and we advance to Result. Cancel via cancelScan (E-stop-free abort).
+  // "Confirm & start scan" = SEND TO ROBOT. The scan now runs as a MoveIt JOINT
+  // TRAJECTORY via the ROS mission (plan on MoveIt/KDL, then execute on the
+  // MovementDriver as absolute joint commands — the controller's IK is retired).
+  // The SAME /plan/trajectory animates both 3D viewers, so the sim and the real
+  // arm run identical joints. Progress is driven by /mission/state (coarse, by
+  // phase — MissionState carries no percentage); on 'complete' the scan is
+  // recorded and we advance to Result. Cancel via cancelScan (/mission/abort).
   sendToRobot=async ()=>{
     if(this.state.scanBusy) return;
-    if(!window.confirm('Send the scan path to the arm and start the scan?\nThe arm will MOVE. Ensure the cell is clear and the E-stop is in reach.')) return;
+    if(!window.confirm('Plan and run the scan on the arm as a MoveIt joint trajectory?\nThe arm will MOVE. Ensure the cell is clear and the E-stop is in reach.')) return;
     this.setState({scanBusy:true, stage:'pass1', passNum:1, progress:0, scanRec:null});
     this._log('info','scan','Send to robot for '+(this.state.partId||'(no part)'));
-    try{
-      const t = await (await fetch('/api/robot/scan_trace',{method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({confirm:true, incidenceDeg:10, speedMms:this.state.motionSpeed})})).json();
-      if(!t.ok || !t.started){
-        this._log('warn','arm','Send to robot refused — '+(t.error||'unknown'));
-        alert('Arm did not start:\n'+(t.error||'unknown'));
-        this.setState({scanBusy:false, stage:'identify'});
-        return;
-      }
-      this._log('info','arm',`Tracing scan path — ${t.total} waypoints`);
-      this._pollScanTrace();
-    }catch(e){
-      this._log('error','arm','Send to robot failed: '+e);
-      this.setState({scanBusy:false, stage:'identify'});
-    }
+    this._planAndExecute('run');
   };
-  // Poll the arm trace; drive the scanning-stage progress, then record the scan.
-  _pollScanTrace=()=>{
-    clearInterval(this._scanTraceTick);
-    this._scanTraceTick = setInterval(async ()=>{
-      try{
-        const s = await (await fetch('/api/robot/follow_status')).json();
-        this.setState({progress: s.total ? Math.round(100*s.completed/s.total) : 0});
-        if(!s.running){
-          clearInterval(this._scanTraceTick);
-          if(s.aborted){ this._log('warn','arm','Trace aborted'); this.setState({scanBusy:false, stage:'identify'}); return; }
-          if(!s.ok){ this._log('error','arm','Trace failed — '+(s.error||'unknown')); this.setState({scanBusy:false, stage:'identify'}); return; }
-          this._log('info','arm',`Trace complete — ${s.completed}/${s.total} waypoints`);
-          this._recordScan();
-        }
-      }catch(e){ /* transient */ }
-    }, 400);
+
+  // ---------- ROS mission driver (plan -> execute over rosbridge) ----------
+  // One flow for every "scan the part" trigger. Plans via /mission/plan
+  // (StartMission), then — once /mission/state reaches 'planned' — executes via
+  // /mission/execute (Trigger). `mode` selects which UI it drives: 'run' = the
+  // Run-tab scanning ring + record on complete; 'trace' = the Debug-tab trace bar.
+  _planAndExecute=async (mode)=>{
+    const ros=this._rosConnect();
+    if(!ros || !ros.callService){
+      this._log('error','mission','ROS graph unreachable (rosbridge :9090) — cannot run the joint-trajectory scan');
+      this._missionFail(mode,'ROS graph offline'); return;
+    }
+    const partId=this.state.partId||'';
+    if(!partId){ this._log('warn','mission','No part selected'); this._missionFail(mode,'no part'); return; }
+    this._mission={active:true, awaitExec:true, mode, lastPhase:null};
+    this._log('info','mission',`Planning (MoveIt/KDL) for ${partId} …`);
+    let r; try{ r=await ros.callService('/mission/plan','qc_msgs/StartMission',{part_id:partId},120000); }
+    catch(e){ r={unavailable:true}; }
+    if(r.unavailable){ this._log('error','mission','Plan request failed (rosbridge)'); this._missionFail(mode,'plan request failed'); return; }
+    if(!(r.values && r.values.accepted)){
+      const m=(r.values&&r.values.message)||'rejected';
+      this._log('warn','mission','Plan rejected — '+m); this._missionFail(mode,m); return;
+    }
+    this._log('info','mission','Plan accepted — awaiting a planned trajectory …');
+    // /mission/execute is fired from _onMissionState once phase === 'planned'.
+  };
+  _execMission=async ()=>{
+    const ros=this._rosConnect(); if(!ros || !ros.callService) return;
+    this._log('info','mission','Executing planned joint trajectory (MovementDriver) …');
+    let r; try{ r=await ros.callService('/mission/execute','std_srvs/Trigger',{},600000); }
+    catch(e){ r={unavailable:true}; }
+    if(r.unavailable) this._log('error','mission','Execute request failed (rosbridge)');
+    else if(!(r.values && r.values.success)) this._log('warn','mission','Execute rejected — '+((r.values&&r.values.message)||'unknown'));
+  };
+  // /mission/state handler. Latched topic: ignore anything unless WE started a
+  // mission (guards against a stale 'complete'/'idle' at connect time).
+  _onMissionState=(m)=>{
+    const phase=(m&&m.phase)||'';
+    const mn=this._mission;
+    if(!mn || !mn.active) return;
+    if(phase!==mn.lastPhase){
+      this._log('info','mission',`phase: ${phase}`+(m.detail?` — ${m.detail}`:''));
+      mn.lastPhase=phase;
+    }
+    if(phase==='planned' && mn.awaitExec){
+      mn.awaitExec=false;
+      // DECOUPLED: a plan does NOT auto-move the arm. The trajectory is now on
+      // /plan/trajectory (animating in the viewers) — inspect it, THEN confirm to
+      // execute. Prevents a bad plan from flinging the real arm on re-plan.
+      const go=window.confirm('Plan ready — trajectory is previewing in the 3D view.\n\nExecute it on the ARM now? The arm WILL move. Verify the preview looks sane and keep the E-stop in reach.');
+      if(go){ this._missionProgress(mn.mode,10); this._execMission(); }
+      else { mn.active=false; this._log('warn','mission','Execution cancelled — plan is ready but NOT run.'); this._missionFail(mn.mode,'not executed'); }
+    }
+    else if(phase==='executing' || phase==='scanning'){ this._missionProgress(mn.mode,50); }
+    else if(phase==='inspecting' || phase==='rescanning'){ this._missionProgress(mn.mode,80); }
+    else if(phase==='complete'){ mn.active=false; this._missionProgress(mn.mode,100); this._missionDone(mn.mode); }
+    else if(phase==='aborted'){ mn.active=false; this._log('warn','mission','Mission aborted'); this._missionFail(mn.mode,'aborted'); }
+    else if(phase==='error'){ mn.active=false; this._log('error','mission','Mission error — '+(m.detail||'unknown')); this._missionFail(mn.mode,m.detail||'error'); }
+  };
+  _missionProgress=(mode, pct)=>{
+    if(mode==='run') this.setState({progress:pct});
+    else this._setTrace(pct, 100, pct<100);
+  };
+  _missionDone=(mode)=>{
+    this._log('info','mission','Mission complete');
+    if(mode==='run') this._recordScan();
+    else this._setTrace(100,100,false);
+  };
+  _missionFail=(mode, why)=>{
+    if(mode==='run') this.setState({scanBusy:false, stage:'identify', progress:0});
+    else this._setTrace(0,0,false);
   };
   // CANCEL: abort the running trace on the arm (clears the queued path) and return
   // to the identify step. POST /api/robot/stop sets the bridge abort flag, so the
   // trace worker stops sending waypoints; the recorded scan is NOT written.
   cancelScan=async ()=>{
-    this._log('warn','arm','Cancel — stopping the arm and clearing the sent path');
-    clearInterval(this._scanTraceTick);
-    try{ await fetch('/api/robot/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}); }
-    catch(e){ this._log('error','arm','Stop request failed: '+e); }
+    this._log('warn','mission','Cancel — aborting the mission');
+    if(this._mission) this._mission.active=false;
+    const ros=this._rosConnect();
+    if(ros && ros.callService){
+      try{ await ros.callService('/mission/abort','std_srvs/Trigger',{},4000); }
+      catch(e){ this._log('error','mission','Abort request failed: '+e); }
+    }
+    // Best-effort: the physical E-stop remains the authoritative stop.
     this.setState({scanBusy:false, stage:'identify', progress:0});
   };
   _recordScan=async ()=>{
@@ -842,15 +967,28 @@ class Component extends DCLogic {
   // ---------- motion (drives the physical SR5 via backend /api/robot/*) ----------
   // One helper for every motion command: POST, merge the returned real status
   // into the UI, and log the outcome. Never throws to the caller.
+  // Motion now goes to the ROS ArmDriver over rosbridge (arm I/O owned by the ROS
+  // graph). Services: set_power/set_drag (SetBool), stop/clear_alarm/home (Trigger);
+  // jog publishes /arm/command ([j1..j6 rad, speed]). E-stop = soft stop + power off
+  // (the PHYSICAL E-stop remains the authoritative safety switch). Motor/drag state
+  // is reflected by /arm/status, not the call response.
   _motion=async (path, body, action)=>{
+    const ros=this._rosConnect();
+    if(!ros || !ros.callService){ this._log('error','arm', action+' — ROS graph unreachable (rosbridge :9090)'); return {ok:false,error:'ros down'}; }
+    body=body||{}; let ok=false, err='';
     try{
-      const r = await (await fetch('/api/robot/'+path,{method:'POST',
-        headers:{'Content-Type':'application/json'}, body:JSON.stringify(body||{})})).json();
-      this._applyStatus(r);
-      if(r.ok) this._log('info','arm', action);
-      else this._log('warn','arm', action+' refused — '+(r.error||'unknown'));
-      return r;
-    }catch(e){ this._log('error','arm', action+' failed: '+e); return {ok:false,error:String(e)}; }
+      if(path==='power'){ const r=await ros.callService('/arm/set_power','std_srvs/SetBool',{data:!!body.on},5000); ok=!!(r.values&&r.values.success); err=r.unavailable?'rosbridge down':(r.values&&r.values.message)||''; }
+      else if(path==='drag'){ const r=await ros.callService('/arm/set_drag','std_srvs/SetBool',{data:!!body.on},5000); ok=!!(r.values&&r.values.success); err=r.unavailable?'rosbridge down':(r.values&&r.values.message)||''; }
+      else if(path==='stop'){ const r=await ros.callService('/arm/stop','std_srvs/Trigger',{},5000); ok=!!(r.values&&r.values.success); err=r.unavailable?'rosbridge down':(r.values&&r.values.message)||''; }
+      else if(path==='estop'){ const r=await ros.callService('/arm/stop','std_srvs/Trigger',{},5000); await ros.callService('/arm/set_power','std_srvs/SetBool',{data:false},5000); ok=!!(r.values&&r.values.success); err=r.unavailable?'rosbridge down':''; }
+      else if(path==='clear_alarm'){ const r=await ros.callService('/arm/clear_alarm','std_srvs/Trigger',{},5000); ok=!!(r.values&&r.values.success); err=r.unavailable?'rosbridge down':(r.values&&r.values.message)||''; }
+      else if(path==='home'){ const r=await ros.callService('/arm/home','std_srvs/Trigger',{},60000); ok=!!(r.values&&r.values.success); err=r.unavailable?'rosbridge down':(r.values&&r.values.message)||''; }
+      else if(path==='move'){ const rad=(body.joints||[]).map(d=>(+d)*Math.PI/180); ok=ros.publish('/arm/command','std_msgs/Float64MultiArray',{layout:{dim:[],data_offset:0}, data:[...rad, +(body.speedMms||30)]}); if(!ok) err='publish failed (rosbridge down)'; }
+      else err='unknown action '+path;
+    }catch(e){ err=String(e); }
+    if(ok) this._log('info','arm', action);
+    else this._log('warn','arm', action+' — '+(err||'refused'));
+    return {ok, error:err};
   };
   // Collision-checked jog: pre-flight a joint target against MoveIt's
   // /check_state_validity over rosbridge (Phase-3 graph). Returns
@@ -921,12 +1059,9 @@ class Component extends DCLogic {
     this.setState(s=>({joints:s.joints.map(j=>j.edited?{...j,edited:false}:j)}));
   };
 
-  // ---------- "Send to robot": trace the generated scan path (demo slice) ----
-  // POSTs to /api/robot/follow_path; the backend streams the arm-frame poses to
-  // the arm (mock, or the real SR5 with Ra present + E-stop). Gated on a live
-  // connection + an operator confirm here; the backend re-checks QC_ALLOW_MOTION
-  // + power. Progress is polled from /api/robot/follow_status. This is the
-  // demo-slice execute path; the real one is /mission/execute over rosbridge.
+  // ---------- Debug-tab trace bar (progress UI) ----------
+  // Small progress bar for the Debug-tab "Send to robot" buttons. Now driven by the
+  // ROS mission phase (via _missionProgress), not a follow_status poll.
   _setTrace=(done,total,running)=>{
     const pct = total ? Math.round(100*done/total) : 0;
     this.setState({traceRunning:running,
@@ -937,49 +1072,22 @@ class Component extends DCLogic {
   // home, and the scan-path trace). Ignores NaN so a partially-typed value
   // doesn't blow the field away mid-keystroke.
   setMotionSpeed=(e)=>{ const v=parseFloat(e.target.value); if(!Number.isNaN(v)) this.setState({motionSpeed:v}); };
+  // Debug-tab "Send to robot": now runs the SAME ROS mission (MoveIt joint
+  // trajectory) as the Run flow, driving the trace bar. Orientation/standoff/speed
+  // are owned by the planner, so the old per-send speed no longer applies.
   traceScanPath=async ()=>{
-    if(!this.state.connected){ this._log('warn','arm','Send to robot ignored — arm not connected'); return; }
-    if(this.state.traceRunning){ this._log('warn','arm','A path is already tracing'); return; }
-    if(!window.confirm('Send the scan path to the arm and trace it?\nThe arm will MOVE. Ensure the cell is clear and the E-stop is in reach.')) return;
-    try{
-      const r = await (await fetch('/api/robot/scan_trace',{method:'POST',
-        headers:{'Content-Type':'application/json'}, body: JSON.stringify({confirm:true, incidenceDeg:10, speedMms:this.state.motionSpeed})})).json();
-      if(!r.ok || !r.started){ this._log('warn','arm','Send to robot refused — '+(r.error||'unknown')); return; }
-      this._log('info','arm',`Tracing scan path — ${r.total} waypoints (source: ${r.source||'path'})`);
-      this._setTrace(0, r.total, true);
-      this._pollTrace();
-    }catch(e){ this._log('error','arm','Send to robot failed: '+e); }
+    if(this.state.traceRunning){ this._log('warn','mission','A scan is already running'); return; }
+    if(!window.confirm('Plan and run the scan on the arm as a MoveIt joint trajectory?\nThe arm will MOVE. Ensure the cell is clear and the E-stop is in reach.')) return;
+    this._setTrace(0, 100, true);
+    this._planAndExecute('trace');
   };
-  // Oriented CONTINUOUS scan: the head aims at the part (within ±10° of the
-  // surface normal), each scan line run as one blended sweep. Shares the same
-  // progress/poll plumbing (follow_status) as the position-only trace.
+  // Kept as a second Debug trigger (the orientation is now decided by the planner,
+  // so this behaves the same as traceScanPath — one joint-trajectory mission).
   scanAimAtPart=async ()=>{
-    if(!this.state.connected){ this._log('warn','arm','Scan ignored — arm not connected'); return; }
-    if(this.state.traceRunning){ this._log('warn','arm','A path is already tracing'); return; }
-    if(!window.confirm('Run the ORIENTED scan (head aims at the part, ±10°, continuous)?\nThe arm will MOVE. Ensure the cell is clear and the E-stop is in reach.')) return;
-    try{
-      const r = await (await fetch('/api/robot/scan_trace',{method:'POST',
-        headers:{'Content-Type':'application/json'}, body: JSON.stringify({confirm:true, incidenceDeg:10, speedMms:this.state.motionSpeed})})).json();
-      if(!r.ok || !r.started){ this._log('warn','arm','Oriented scan refused — '+(r.error||'unknown')); return; }
-      this._log('info','arm',`Oriented scan — ${r.total} waypoints (source: ${r.source||'path'})`);
-      this._setTrace(0, r.total, true);
-      this._pollTrace();
-    }catch(e){ this._log('error','arm','Oriented scan failed: '+e); }
-  };
-  _pollTrace=()=>{
-    clearInterval(this._traceTick);
-    this._traceTick = setInterval(async ()=>{
-      try{
-        const s = await (await fetch('/api/robot/follow_status')).json();
-        this._setTrace(s.completed||0, s.total||0, !!s.running);
-        if(!s.running){
-          clearInterval(this._traceTick);
-          if(s.aborted) this._log('warn','arm',`Path trace aborted at ${s.completed}/${s.total}`);
-          else if(s.ok) this._log('info','arm',`Path trace complete — ${s.completed}/${s.total} waypoints`);
-          else this._log('error','arm',`Path trace failed at ${s.completed}/${s.total} — ${s.error||'unknown'}`);
-        }
-      }catch(e){ /* transient */ }
-    }, 400);
+    if(this.state.traceRunning){ this._log('warn','mission','A scan is already running'); return; }
+    if(!window.confirm('Plan and run the scan on the arm as a MoveIt joint trajectory?\nThe arm will MOVE. Ensure the cell is clear and the E-stop is in reach.')) return;
+    this._setTrace(0, 100, true);
+    this._planAndExecute('trace');
   };
   stopTrace=async ()=>{ await this._motion('stop',{}, 'Stop — path trace + motion halted'); };
 
@@ -1023,8 +1131,47 @@ class Component extends DCLogic {
       scanCount:scans.length, scansRows };
   }
 
+  // Forward kinematics for the scanner-head pose from OUR joint angles (deg from
+  // /arm/joint_states), independent of the controller. Same chain as the URDF +
+  // sim (viewer3d chain.json): overhead mount (z=H, roll pi) -> 6 revolute links ->
+  // camera tip. Returns {xyz:[mm], rpy:[deg]} in the table/cell frame (z=0 at table,
+  // arm base at z=H). This is the head pose "in our own software".
+  _fkHead=()=>{
+    const J=this.state.joints, q=[];
+    for(let i=0;i<6;i++) q.push((((J[i]||{}).v)||0)*Math.PI/180);
+    const M=((this._CFG||{}).workspace||{}).mount||{};
+    const H=(M.height_mm!=null?M.height_mm:(M.base_xyz_mm?M.base_xyz_mm[2]:1000))/1000;
+    const links=[
+      {xyz:[0,0,0.328],       axis:[0,0,1]},
+      {xyz:[0,0,0],           axis:[0,1,0]},
+      {xyz:[0.049664,0,0.399707],  axis:[0,-1,0]},
+      {xyz:[-0.049725,0,0.399811], axis:[0,0,1]},
+      {xyz:[0,0.13547,0],     axis:[0,-1,0]},
+      {xyz:[0,0,0.103868],    axis:[0,0,1]},
+    ];
+    const mul=(a,b)=>{const c=new Array(16).fill(0);for(let i=0;i<4;i++)for(let j=0;j<4;j++)for(let k=0;k<4;k++)c[i*4+j]+=a[i*4+k]*b[k*4+j];return c;};
+    const tr=(x,y,z)=>[1,0,0,x,0,1,0,y,0,0,1,z,0,0,0,1];
+    const rot=(ax,a)=>{const[x,y,z]=ax,c=Math.cos(a),s=Math.sin(a),t=1-c;return[
+      t*x*x+c, t*x*y-s*z, t*x*z+s*y, 0,
+      t*x*y+s*z, t*y*y+c, t*y*z-s*x, 0,
+      t*x*z-s*y, t*y*z+s*x, t*z*z+c, 0, 0,0,0,1];};
+    // FK to the FLANGE (xMateSR5_link6) — the frame MoveIt/compute_ik + go-to target,
+    // so this readout matches a commanded go-to point. (Camera-lens offset omitted;
+    // it's a later refinement, consistent with the planner also targeting the flange.)
+    let T=mul(tr(0,0,H), rot([1,0,0],Math.PI));
+    for(let i=0;i<6;i++){ T=mul(T, tr(...links[i].xyz)); T=mul(T, rot(links[i].axis, q[i])); }
+    const d=180/Math.PI, cl=v=>Math.max(-1,Math.min(1,v));
+    const r11=T[0],r21=T[4],r31=T[8],r32=T[9],r33=T[10],r22=T[5],r23=T[6];
+    const pitch=Math.asin(-cl(r31));
+    let roll,yaw;
+    if(Math.abs(r31)<0.9999){ roll=Math.atan2(r32,r33); yaw=Math.atan2(r21,r11); }
+    else { roll=Math.atan2(-r23,r22); yaw=0; }
+    return {xyz:[T[3]*1000,T[7]*1000,T[11]*1000], rpy:[roll*d,pitch*d,yaw*d]};
+  };
+
   debugVals(){
     const s=this.state;
+    const hp=this._fkHead();   // scanner-head pose from OUR FK (table frame)
     const joints=s.joints.map((j,i)=>({ n:j.n,
       // display readouts (temperature isn't exposed by the driver -> '—')
       val:j.v.toFixed(j.u==='m'?2:1)+' '+j.u, unit:j.u,
@@ -1061,11 +1208,11 @@ class Component extends DCLogic {
       setGotoX:this._setGoto('gotoX'), setGotoY:this._setGoto('gotoY'), setGotoZ:this._setGoto('gotoZ'),
       goToPoint:this.goToPoint,
       gotoHint:(((this._CFG||{}).workspace||{}).mount ? (this._CFG.workspace.mount.base_xyz_mm[2]+' mm above the table') : '1200 mm above the table'),
-      // controller-reported TCP (raw SDK cartPosture; NOT our frame math).
-      // trans arrives in metres, rpy in radians — shown as mm / deg.
-      tcpXyz: this._tcpRaw ? this._tcpRaw.trans.map(v=>(v*1000).toFixed(1)).join('  ') : '—',
-      tcpRpy: this._tcpRaw ? this._tcpRaw.rpy.map(v=>(v*180/Math.PI).toFixed(1)).join('  ') : '—',
-      tcpFrame: this._tcpRaw ? this._tcpRaw.frame : 'no report',
+      // Scanner-head pose computed by OUR forward kinematics from the live joint
+      // angles (not the controller). Table/cell frame: mm + deg.
+      tcpXyz: s.connected ? hp.xyz.map(v=>v.toFixed(1)).join('  ') : '—',
+      tcpRpy: s.connected ? hp.rpy.map(v=>v.toFixed(1)).join('  ') : '—',
+      tcpFrame: s.connected ? 'FK · table frame (our IK)' : 'no telemetry',
     };
   }
 
@@ -1146,8 +1293,11 @@ class Component extends DCLogic {
       dbgFg:s.tab==='debug'?'#000':'var(--color-charcoal-500)', dbgBar:s.tab==='debug'?'#000':'transparent',
       clock:s.clock,
       // safety bar
-      connDot:s.connected?'var(--color-lime-500)':'#DA1E28',
-      connLabel:s.connected?'Connected':'Offline',
+      // Green ONLY when connected to the REAL arm; amber if connected but on the mock
+      // (so a silent rokae→mock fallback is obvious during real-arm testing).
+      connDot:s.connected?(/mock/i.test(s.armBackend)?'var(--color-amber-400)':'var(--color-lime-500)'):(s.rosUp?'var(--color-amber-400)':'#DA1E28'),
+      connLabel:s.connected?('Connected · '+(s.armBackend||'arm')):(s.rosUp?'No arm telemetry':'ROS graph down'),
+      rosDown:!s.rosUp,
       ip:s.ip, setIp:this.setIp,
       robotConnect:this._robotConnect, robotDisconnect:this._robotDisconnect,
       stateLabel,stateFg,stateDot,stateBg,stateBorder,stateAnim,

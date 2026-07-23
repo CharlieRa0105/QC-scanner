@@ -24,6 +24,7 @@ RUNTIME NOTES (build-to-interface state):
     TODO, never faked.
 """
 
+import json
 import os
 import sys
 
@@ -37,11 +38,32 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile
+from std_msgs.msg import String
 from trajectory_msgs.msg import JointTrajectory
 
 # Latched (transient-local) so a late web subscriber still gets the last plan.
 _LATCHED = QoSProfile(depth=1)
 _LATCHED.durability = DurabilityPolicy.TRANSIENT_LOCAL
+
+
+def _lookat_R(pos, tgt):
+    """Rotation whose +Z (the tool approach axis / flange +Z) points from `pos` to
+    `tgt`, with a STABLE up-reference so consecutive scan poses share one smooth
+    posture. Replaces per-face surface-normal alignment, whose orientation flipped
+    between faces and made the IK jump between arm branches (base swinging ±320°).
+    Columns are the tool x,y,z axes expressed in the parent (table) frame."""
+    import numpy as np
+    z = np.asarray(tgt, float) - np.asarray(pos, float)
+    nz = np.linalg.norm(z)
+    if nz < 1e-9:
+        return np.eye(3)
+    z = z / nz
+    up = np.array([0.0, 0.0, 1.0])
+    if abs(float(np.dot(z, up))) > 0.95:    # aim ~vertical -> use world +X as up-ref
+        up = np.array([1.0, 0.0, 0.0])
+    x = np.cross(up, z); x = x / np.linalg.norm(x)
+    y = np.cross(z, x)
+    return np.column_stack([x, y, z])
 
 
 class PathPlannerNode(Node):
@@ -50,6 +72,11 @@ class PathPlannerNode(Node):
         self._cbg = ReentrantCallbackGroup()
         self._scanpath_pub = self.create_publisher(ScanPath, "/plan/scanpath", _LATCHED)
         self._traj_pub = self.create_publisher(JointTrajectory, "/plan/trajectory", _LATCHED)
+        # Diagnostic: per-waypoint pose<->KDL-IK-joints pairing, as a JSON string so
+        # the console can read it over rosbridge (no custom msg, no qc_msgs rebuild)
+        # and print it to its Log stream. Latched so a late web subscriber gets the
+        # last plan's IK.
+        self._ik_pub = self.create_publisher(String, "/plan/ik", _LATCHED)
         # move_group clients (PathPlanner is a client of MoveIt, per §4.2).
         self._cart_cli = self.create_client(
             GetCartesianPath, "/compute_cartesian_path", callback_group=self._cbg)
@@ -76,7 +103,11 @@ class PathPlannerNode(Node):
         return repo
 
     def _find_cad(self, repo, part_id):
-        cad_dir = os.path.join(repo, "config", "cad")
+        # Same CAD source as the console/host backend: QC_PARTS_DIR if set (the
+        # operator's part library, e.g. ~/Desktop/Parts mounted into the container),
+        # else the repo's config/cad. WITHOUT this the planner looked only in
+        # config/cad and missed parts the console lists -> "no CAD for part_id".
+        cad_dir = os.environ.get("QC_PARTS_DIR") or os.path.join(repo, "config", "cad")
         for fn in sorted(os.listdir(cad_dir)):
             stem, ext = os.path.splitext(fn)
             if stem == part_id and ext.lower() in (".step", ".stp", ".stl", ".obj"):
@@ -99,6 +130,44 @@ class PathPlannerNode(Node):
         cy = (min(ys) + max(ys)) / 2.0
         return (ax - cx, ay - cy, pedestal - min(zs))
 
+    def _topdown_waypoints(self, part_points_m, p):
+        """Overhead raster: a boustrophedon grid of DOWN-aiming poses on a plane
+        `standoff` above the part's top, covering its X/Y footprint. Every pose aims
+        straight down, so the arm holds ONE stable posture (no branch flips) — unlike
+        surface-normal coverage, which made an overhead arm reconfigure through
+        singularities between faces (±300° joint swings). Validated offline: joint
+        spans <15°, max step ~10°. Returns [(pos, target, line_id)] in the (already
+        placed) table frame. `planner.scan_mode='surface'` restores full coverage."""
+        import numpy as np
+        pts = np.asarray(part_points_m, float)
+        lo = pts.min(axis=0); hi = pts.max(axis=0)
+        standoff = float(p.get("standoff_mm", 250)) / 1000.0
+        try:
+            from libs.path_planning.waypoint_generator import raster_spacing_from_fov
+            pitch = raster_spacing_from_fov(
+                p.get("standoff_mm", 250), p.get("fov_deg", 40), p.get("overlap", 0.3)) / 1000.0
+        except Exception:  # noqa: BLE001
+            pitch = float(p.get("raster_pitch_mm", 50)) / 1000.0
+        pitch = max(0.01, float(pitch))
+        top = float(hi[2]); z = top + standoff
+
+        def grid(a, b):
+            out = []; v = float(a)
+            while v <= float(b) + 1e-9:
+                out.append(v); v += pitch
+            if not out or out[-1] < float(b) - 1e-9:
+                out.append(float(b))
+            return out
+
+        gx = grid(lo[0], hi[0]); gy = grid(lo[1], hi[1])
+        wps = []; line = 0
+        for i, x in enumerate(gx):
+            row = gy if i % 2 == 0 else list(reversed(gy))
+            for y in row:
+                wps.append(([x, y, z], [x, y, top], line))
+            line += 1
+        return wps
+
     def _execute(self, goal_handle):
         part_id = goal_handle.request.part_id
         self.get_logger().info(f"planning part_id={part_id!r}")
@@ -117,12 +186,6 @@ class PathPlannerNode(Node):
 
             from libs.path_planning.cad_loader import load_cad
             from libs.path_planning.frame_transform import FrameTransform, matrix_to_quaternion
-            from libs.path_planning.incidence_cone_modifier import apply_incidence_cone_relaxation
-            from libs.path_planning.normal_estimation import sample_surface
-            from libs.path_planning.waypoint_generator import (
-                generate_raster_waypoints,
-                raster_spacing_from_fov,
-            )
             from libs.qc_config import load_config
 
             cfg = load_config()
@@ -131,32 +194,26 @@ class PathPlannerNode(Node):
 
             fb("coverage planning", 0.35)
             verts, faces = load_cad(cad_path, mesh_size=p.get("mesh_size_mm", 5.0))
-            pts, normals = sample_surface(verts, faces, n_samples=p.get("samples", 20000))
-            spacing = raster_spacing_from_fov(
-                p.get("standoff_mm", 250), p.get("fov_deg", 40), p.get("overlap", 0.3)
-            )
-            wps = generate_raster_waypoints(
-                pts, normals,
-                standoff_mm=p.get("standoff_mm", 250),
-                raster_spacing_mm=spacing,
-                along_track_mm=p.get("along_track_mm", 10),
-                face_angle_tol_deg=p.get("face_angle_tol_deg", 30),
-            )
-            relaxed = apply_incidence_cone_relaxation(
-                wps, max_incidence_angle_deg=p.get("max_incidence_deg", 25)
-            )
 
             fb("frame transform", 0.6)
             ft = FrameTransform.from_config(cfg)
             standoff_mm = float(p.get("standoff_mm", 250))
+            # Part -> table frame, then REACHABLE PLACEMENT: shift so the footprint
+            # centre sits off the base's singular column and the part is raised into
+            # the reach sweet-spot (placeholder for the measured corner transform +
+            # fixture height — decision 5 / session-log 2026-07-22 §2).
+            part_points_m = [ft.apply_point(v) for v in verts]
+            dx, dy, dz = self._reachable_shift(part_points_m, p)
+            part_points_m = [[v[0] + dx, v[1] + dy, v[2] + dz] for v in part_points_m]
+
+            # TOP-DOWN scan poses over the placed part (see _topdown_waypoints). Every
+            # pose aims straight down -> ONE stable arm posture -> continuous joints
+            # (surface-normal coverage forced ±300° branch flips on this overhead arm).
             scanpath = ScanPath()
             scanpath.part_id = part_id
             scanpath.standoff_mm = standoff_mm
-            for wp, r in zip(wps, relaxed):
-                pos = ft.apply_point(r["position"])
-                m = np.column_stack([r["x_axis"], r["y_axis"], r["z_axis"]])
-                q = matrix_to_quaternion(ft.rotation @ m)
-                tgt = ft.apply_point(wp.position - wp.normal * standoff_mm)
+            for pos, tgt, line_id in self._topdown_waypoints(part_points_m, p):
+                q = matrix_to_quaternion(_lookat_R(pos, tgt))
                 sw = ScanWaypoint()
                 sw.pose = Pose()
                 sw.pose.position.x, sw.pose.position.y, sw.pose.position.z = (float(v) for v in pos)
@@ -164,24 +221,9 @@ class PathPlannerNode(Node):
                  sw.pose.orientation.z, sw.pose.orientation.w) = (float(v) for v in q)
                 sw.target = Point()
                 sw.target.x, sw.target.y, sw.target.z = (float(v) for v in tgt)
-                sw.incidence_deg = float(r["incidence_angle_deg"])
-                sw.line_id = int(wp.line_id)
+                sw.incidence_deg = 0.0
+                sw.line_id = int(line_id)
                 scanpath.waypoints.append(sw)
-
-            # Reachable placement. The identity corner_transform leaves the part at
-            # its CAD origin -- straddling the base's singular column (x=y=0) and
-            # mostly BELOW the arm's reach (a part on the table is ~1 m down; the
-            # flange only reaches ~0.09 m above the table). Shift the whole scene so
-            # the footprint centre sits at a reachable anchor (off the column) and
-            # the part's lowest point is raised to a pedestal height in the reach
-            # sweet-spot. This is the placeholder for the measured corner_transform +
-            # the raised fixture (decision 5 / session-log 2026-07-22 §2).
-            part_points_m = [ft.apply_point(v) for v in verts]  # part->table frame (m)
-            dx, dy, dz = self._reachable_shift(part_points_m, p)
-            for sw in scanpath.waypoints:
-                sw.pose.position.x += dx; sw.pose.position.y += dy; sw.pose.position.z += dz
-                sw.target.x += dx; sw.target.y += dy; sw.target.z += dz
-            part_points_m = [[v[0] + dx, v[1] + dy, v[2] + dz] for v in part_points_m]
             self._scanpath_pub.publish(scanpath)
 
             fb("moveit", 0.8)
@@ -197,6 +239,17 @@ class PathPlannerNode(Node):
                 ik_client=self._ik_cli, plan_client=self._plan_cli,
             )
             self._traj_pub.publish(trajectory.joint_trajectory)
+
+            # Per-waypoint IK (pose <-> joints) for the console Log stream. On by
+            # default; QC_LOG_WAYPOINT_IK=0 disables it (N IK service calls, so it
+            # adds plan time on parts with many waypoints).
+            if os.environ.get("QC_LOG_WAYPOINT_IK", "1") != "0":
+                ik_report = mp.compute_waypoint_ik(self, self._ik_cli, scanpath)
+                self._ik_pub.publish(String(data=json.dumps(ik_report)))
+                self.get_logger().info(
+                    f"per-waypoint IK: {ik_report['solved']}/{ik_report['count']} "
+                    "waypoints solved (published on /plan/ik)"
+                )
 
             result.success = True
             result.scanpath = scanpath

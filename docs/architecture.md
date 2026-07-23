@@ -11,6 +11,14 @@ machine). This file is what a fresh session on any machine reads.
 
 > Status tags: **built** · **partial** (some code, not wired in) · **to build**.
 
+> **Status refreshed 2026-07-23.** The §3 node table reflects the current build:
+> the full mission graph is now scaffolded (all six nodes register their
+> interfaces), and MoveIt, rosbridge, the `qc-humble` Docker container, and a
+> browser three.js viewer are wired. The §4 interface contract was the build
+> target and is largely met. ScanningDriver and Phase-2 Inspection remain
+> **interface-only** (hardware / algorithm-blocked). The marked-corner
+> calibration (decision 5) is still a placeholder shift, not a measured transform.
+
 ---
 
 ## 1. What the system does
@@ -57,15 +65,15 @@ PathPlanner — it is not a separate node.
 
 | Node | Role | Status |
 | --- | --- | --- |
-| **TaskManager** | Mission orchestrator. Owns the mission lifecycle and `/mission/state`; sequences plan → (operator confirm) → execute → scan → inspect; owns the rescan loop and **mission abort**. | to build |
-| **PathPlanner** | Owns the **whole plan**: generate coverage waypoints from CAD, apply the marked-corner transform, load part + table into MoveIt as collision objects, run MoveIt to produce the collision-free **trajectory**. Publishes the scan path + trajectory for preview. Plan-fully, then hand off. | partial (planning libs exist; MoveIt half + node to build) |
-| **MovementDriver** | **Executes only.** Plays the planned trajectory to ArmDriver, watches joint feedback, confirms progress. No planning. | to build |
+| **TaskManager** | Mission orchestrator. Owns the mission lifecycle and `/mission/state`; sequences plan → (operator confirm) → execute → scan → inspect; owns the rescan loop and **mission abort**. | **built** (scaffold; sequencing real, end-to-end untested) |
+| **PathPlanner** | Owns the **whole plan**: generate coverage waypoints from CAD, apply the marked-corner transform, load part + table into MoveIt as collision objects, run MoveIt to produce the collision-free **trajectory**. Publishes the scan path + trajectory for preview. Plan-fully, then hand off. | **built** (coverage + frame transform + MoveIt cartesian/free-space + per-waypoint IK; degrades to scanpath-only when move_group is down) |
+| **MovementDriver** | **Executes only.** Plays the planned trajectory to ArmDriver, watches joint feedback, confirms progress. No planning. | **built** (scaffold; playback logic real, needs a live trajectory + arm to exercise) |
 | **ArmDriver** | Thin SR5 layer: joint command in, joint state + status out; power/drag/stop/home/clear-alarm services. Mock + real (xCore SDK) backends. | built |
 | **RailDriver** | Dormant stub — there is no rail (kept for a possible future larger part). | out of scope |
-| **ScanningDriver** | MIRACO Plus bridge. start/stop from TaskManager; reports capture state + the cloud file path. Continuous capture during the sweep. | to build |
-| **InspectionNode (Phase 2)** | Thin ROS wrapper over a pure-Python inspection library (extract → clean → quality → register → deviation). Runs the quality gate + deviation analysis; requests a rescan on quality fail. | to build |
-| **rosbridge** | `rosbridge_suite` in the container — a WebSocket (`ws://localhost:9090`) exposing the graph to the web app. The host has no ROS 2, so this is the only web ↔ ROS 2 path. | to build |
-| **Web app** | The operator console (browser + backend). Calls mission services, subscribes to state + telemetry, renders the preview. | built (as a console; ROS 2 wiring to build) |
+| **ScanningDriver** | MIRACO Plus bridge. start/stop from TaskManager; reports capture state + the cloud file path. Continuous capture during the sweep. | **interface only** (node built; hardware-blocked — no MIRACO SDK, never fabricates a cloud) |
+| **InspectionNode (Phase 2)** | Thin ROS wrapper over a pure-Python inspection library (extract → clean → quality → register → deviation). Runs the quality gate + deviation analysis; requests a rescan on quality fail. | **interface only** (node built; pipeline stages need Open3D/TEASER++ + real scans) |
+| **rosbridge** | `rosbridge_suite` in the container — a WebSocket (`ws://localhost:9090`) exposing the graph to the web app. The host has no ROS 2, so this is the only web ↔ ROS 2 path. | **built** (`qc_bringup/launch/rosbridge.launch.py`) |
+| **Web app** | The operator console (browser + backend). Calls mission services, subscribes to state + telemetry, renders the preview. | **built**; a browser three.js viewer (`gui/viewer/`) now animates MoveIt's planned trajectory live over rosbridge |
 
 ---
 
@@ -81,7 +89,7 @@ Custom message/service/action types live in a **`qc_msgs`** package (to build).
 > is a one-line-per-topic cleanup (tracked in `refactor-guide.md`). Canonical names
 > are used throughout this doc.
 
-### 4.1 Custom interfaces — `qc_msgs` (to build)
+### 4.1 Custom interfaces — `qc_msgs` (built)
 
 **Messages**
 - `MissionState.msg` — `string phase` · `string part_id` · `uint32 attempt` · `string detail`
@@ -145,14 +153,14 @@ Custom message/service/action types live in a **`qc_msgs`** package (to build).
 | `/arm/home` | service | `std_srvs/Trigger` | Move to home pose. |
 | `/arm/clear_alarm` | service | `std_srvs/Trigger` | Clear servo alarm / released e-stop. |
 
-**ScanningDriver** (to build)
+**ScanningDriver** (interface only — hardware-blocked)
 | Interface | Kind | Type | Meaning |
 | --- | --- | --- | --- |
 | `/scan/start` | service (server) | `std_srvs/Trigger` | Begin continuous capture. |
 | `/scan/stop` | service (server) | `std_srvs/Trigger` | End capture; export the cloud. |
 | `/scan/state` | topic (pub) | `qc_msgs/ScanState` | `idle\|scanning\|done\|error` + the exported cloud path. |
 
-**InspectionNode / Phase 2** (to build)
+**InspectionNode / Phase 2** (interface only — algorithm-blocked)
 | Interface | Kind | Type | Meaning |
 | --- | --- | --- | --- |
 | `/inspect` | action (server) | `qc_msgs/Inspect` | Run extract → clean → quality → register → deviation on a cloud. Result carries `quality_pass`, `rescan_requested`, and the deviation report. |

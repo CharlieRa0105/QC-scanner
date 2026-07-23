@@ -111,6 +111,11 @@ class ArmDriver(Node):
         self.arm.hold_to_drag = self._hold_to_drag
         self.arm._sim_index = max(0, min(6, self.drag_button_key - 1))  # sim button -> CR<key>
         self.arm.connect()
+        # Start the mock at HOME (not the zero pose) so telemetry + the sim begin at
+        # the parked pose; the mock then only leaves HOME on an explicit /arm/command.
+        home_rad = [math.radians(float(d)) for d in self.home_deg[:self._n]]
+        self.arm.joints = list(home_rad)
+        self.arm._target = list(home_rad)
         self.backend_name = "mock"
         self._target = ""
 
