@@ -11,6 +11,23 @@ fresh Claude session) can see how the code got to its current state.
 
 ---
 
+## Current state — resume here (2026-07-23)
+
+`main` is the **pre-internal-IK console** (host backend + ROKAE controller IK). We
+reverted here after an "own IK via ROS 2 + MoveIt" attempt (arm I/O migrated to the
+ROS graph) proved the scan trajectory kinematically unusable for the overhead arm.
+Full story: `docs/session-logs/2026-07-23.md`.
+
+- **`main` @ `dafe297`** — working console; run `scripts/run_console.sh` (no ROS/Docker).
+- **`internal-ik-ros` @ `abc2d5e`** — the entire ROS/MoveIt/internal-IK effort, parked
+  for later; launcher `scripts/launch_stack.sh`.
+- **Not pushed:** `origin/main` still at `abc2d5e`; publishing the revert needs
+  `git push origin internal-ik-ros` then `git push --force origin main`.
+
+The 2026-07-16 resume notes below are valid again — `main` is that console lineage.
+
+---
+
 ## Current state — resume here (as of 2026-07-16, on top of `2eb3499`)
 
 **Real-arm Cartesian motion works** ("Go to point"). The whole fix + the working
